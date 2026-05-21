@@ -11,7 +11,7 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'hand-to-guess-string'
 
     # MySQL数据库连接（连接队友已创建的stroke_rehab_game数据库）
-    SQLALCHEMY_DATABASE_URI = 'mysql+pymysql://root:18718957842@localhost:3306/stroke_rehab_game'
+    SQLALCHEMY_DATABASE_URI = 'mysql+pymysql://root:Ljy18718957842@localhost:3306/stroke_rehab_game'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ECHO = False
 

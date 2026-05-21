@@ -122,110 +122,92 @@ def login():
 @auth_bp.route('/register', methods=['POST'])
 def register():
     """
-    患者/医生注册接口
-    前端发送 JSON 格式：
-    {
-        "username": "zhangsan",
-        "email": "zs@example.com",
-        "password": "123456",
-        "confirmPassword": "123456",
-        "register-user-type": "patient"   // 或 "doctor"
-    }
-    注意：前端缺少 patient_name, gender, age 等字段，这里使用默认值填充
-    """
+        患者/医生注册接口
+        前端发送 JSON 格式：
+        {
+            "username": "zhangsan",
+            "email": "zs@example.com",
+            "password": "123456",
+            "confirmPassword": "123456",
+            "register-user-type": "patient"   // 或 "doctor"
+        }
+        注意：前端缺少 patient_name, gender, age 等字段，这里使用默认值填充
+        """
     try:
         data = request.get_json()
         if not data:
             return jsonify({'code': 400, 'message': '请求数据为空'}), 400
 
+        # 必填字段：username, password
         username = data.get('username')
-        email = data.get('email')
         password = data.get('password')
-        confirm_password = data.get('confirmPassword')
-        user_type = data.get('register-user-type')   # 'patient' 或 'doctor'
+        if not username or not password:
+            return jsonify({'code': 400, 'message': '用户名和密码不能为空'}), 400
 
-        # 基础字段校验
-        if not all([username, email, password, confirm_password, user_type]):
-            return jsonify({'code': 400, 'message': '缺少必要参数'}), 400
+        # 可选字段，提供默认值
+        email = data.get('email', '')                     # 如果没有 email，默认为空
+        confirm_password = data.get('confirmPassword', password)  # 如果没有，默认与 password 相同
+        user_type = data.get('register-user-type', data.get('userType', 'patient'))  # 兼容两种字段名
 
-        if password != confirm_password:
+        # 如果传了 confirmPassword，则校验是否与 password 一致
+        if data.get('confirmPassword') and password != confirm_password:
             return jsonify({'code': 400, 'message': '两次输入的密码不一致'}), 400
 
-        # 根据注册类型分别处理
+        # 可以根据前端是否传了 patient_name 来决定姓名，否则用 username
+        patient_name = data.get('patient_name', username)
+
+        # 以下按照之前逻辑处理注册
         if user_type == 'patient':
-            # 检查用户名是否已被患者占用
             if Patient.query.filter_by(username=username).first():
                 return jsonify({'code': 400, 'message': '用户名已存在'}), 400
 
             patient_id = generate_patient_id()
-
-            # 创建患者记录，缺失字段使用默认值
             new_patient = Patient(
                 patient_id=patient_id,
-                patient_name=username,          # 默认用用户名作为姓名
-                gender='男',                    # 默认性别，建议前端后续补充
-                age=0,                          # 默认年龄，前端可后续修改
-                affected_side='左',             # 默认患侧
-                stroke_type='缺血性',            # 默认卒中类型
+                patient_name=patient_name,
+                gender=data.get('gender', '男'),
+                age=data.get('age', 0),
+                affected_side=data.get('affected_side', '左'),
+                stroke_type=data.get('stroke_type', '缺血性'),
                 admission_time=datetime.now(),
-                doctor_name='',                 # 主治医生姓名，后续可关联
-                phone='',                       # 联系方式，后续可补充
-                remark='',                      # 备注
+                doctor_name=data.get('doctor_name', ''),
+                phone=data.get('phone', ''),
+                remark=data.get('remark', ''),
                 username=username,
-                pwd=password,                   # 明文存储（开发阶段），生产环境务必使用哈希
-                doctor_id='',                   # 主治医生ID，后续可关联
+                pwd=password,          # 明文，后续可改为哈希
+                doctor_id=data.get('doctor_id', ''),
                 role='patient'
             )
             db.session.add(new_patient)
             db.session.commit()
-
-            return jsonify({
-                'code': 201,
-                'message': '患者注册成功',
-                'data': {
-                    'patient_id': patient_id,
-                    'username': username
-                }
-            }), 201
+            return jsonify({'code': 201, 'message': '患者注册成功', 'data': {'patient_id': patient_id, 'username': username}}), 201
 
         elif user_type == 'doctor':
-            # 检查用户名是否已被医生占用
             if Doctor.query.filter_by(username=username).first():
                 return jsonify({'code': 400, 'message': '用户名已存在'}), 400
 
             doctor_id = generate_doctor_id()
-
             new_doctor = Doctor(
                 doctor_id=doctor_id,
-                doctor_name=username,
-                gender='男',               # 默认性别
-                department='康复科',       # 默认科室
-                phone='',
+                doctor_name=data.get('doctor_name', username),
+                gender=data.get('gender', '男'),
+                department=data.get('department', '康复科'),
+                phone=data.get('phone', ''),
                 username=username,
                 pwd=password,
                 role='doctor'
             )
             db.session.add(new_doctor)
             db.session.commit()
-
-            return jsonify({
-                'code': 201,
-                'message': '医生注册成功',
-                'data': {
-                    'doctor_id': doctor_id,
-                    'username': username
-                }
-            }), 201
+            return jsonify({'code': 201, 'message': '医生注册成功', 'data': {'doctor_id': doctor_id, 'username': username}}), 201
 
         else:
             return jsonify({'code': 400, 'message': '不支持的注册类型，请选择 patient 或 doctor'}), 400
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({
-            'code': 500,
-            'message': f'注册失败: {str(e)}'
-        }), 500
+        return jsonify({'code': 500, 'message': f'注册失败: {str(e)}'}), 500
+
 
 @auth_bp.route('/profile', methods=['GET'])
 @jwt_required()

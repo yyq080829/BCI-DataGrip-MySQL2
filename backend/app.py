@@ -34,11 +34,13 @@ def create_app():
     from routes.training import training_bp
     from routes.bci import bci_bp
     from routes.unity import unity_bp
+    from routes.admin import admin_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(bci_bp, url_prefix='/api/bci')
     app.register_blueprint(unity_bp, url_prefix='/api/unity')
+    app.register_blueprint(admin_bp)
 
     return app
 
