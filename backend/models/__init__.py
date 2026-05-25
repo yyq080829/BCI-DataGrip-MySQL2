@@ -4,6 +4,7 @@ def init_models():
     from models.training import TrainingData, GameLevel
     from models.bci_data import BCIData
     from models.assessment import StageAssessment
+    from models.assessment_question import Questionnaire, Question
     return {
         'Patient': Patient,
         'Doctor': Doctor,
@@ -11,5 +12,7 @@ def init_models():
         'TrainingData': TrainingData,
         'GameLevel': GameLevel,
         'BCIData': BCIData,
-        'StageAssessment': StageAssessment
+        'StageAssessment': StageAssessment,
+        'Questionnaire': Questionnaire,
+        'Question': Question
     }

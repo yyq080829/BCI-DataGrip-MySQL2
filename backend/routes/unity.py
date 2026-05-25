@@ -64,7 +64,6 @@ def handle_unity_disconnect():
 @socketio.on('eeg_stream', namespace='/unity')
 def handle_eeg_stream(data):
     """实时脑电数据流处理"""
-    #  处理实时脑电数据流
     print(f'[Unity WebSocket] 收到数据: {data}')
     emit('game_command', {
         'action': 'idle',

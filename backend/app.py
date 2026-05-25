@@ -28,6 +28,7 @@ def create_app():
         import models.training
         import models.bci_data
         import models.user
+        import models.assessment_question
 
     # 注册蓝图（API路由）
     from routes.auth import auth_bp
@@ -35,12 +36,14 @@ def create_app():
     from routes.bci import bci_bp
     from routes.unity import unity_bp
     from routes.admin import admin_bp
+    from routes.assessment import assessment_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(bci_bp, url_prefix='/api/bci')
     app.register_blueprint(unity_bp, url_prefix='/api/unity')
     app.register_blueprint(admin_bp)
+    app.register_blueprint(assessment_bp)
 
     return app
 
