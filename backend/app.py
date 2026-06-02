@@ -45,6 +45,9 @@ def create_app():
     app.register_blueprint(admin_bp)
     app.register_blueprint(assessment_bp)
 
+    from services.hybridbci_client import HybridBCIClient
+    app.config['BCI_CLIENT'] = None
+
     return app
 
 
@@ -52,4 +55,10 @@ if __name__ == '__main__':
     app = create_app()
     # 启动服务器，监听所有网络接口，方便局域网内的设备访问
     # Unity、HybridBCI平台、前端都可以通过IP地址访问
+    from services.hybridbci_client import HybridBCIClient
+
+    bci_client = HybridBCIClient(socketio, host='127.0.0.1', port=8000)
+    bci_client.start()
+    app.config['BCI_CLIENT'] = bci_client
+    print("[后端] HybridBCI 客户端已启动，等待平台数据...")
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
