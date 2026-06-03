@@ -6,6 +6,7 @@ HybridBCI 平台客户端（IPC Socket 通信）
 - 接收 ipc_algorithm_test 消息
 - 解析 attention / blink / gyroscope 等算法输出
 - 通过 routes.unity.send_command_to_unity 推送给对应的 Unity 客户端
+- 新增：向平台发送 ipc_event 事件（例如游戏结果反馈）
 """
 
 import socket
@@ -13,7 +14,7 @@ import json
 import threading
 import time
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
 logging.basicConfig(level=logging.INFO, format='[HybridBCI] %(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class HybridBCIClient:
         self.running = False
         self.thread = None
         self.patient_id = None  # 可从平台信息中获取
+        self._send_lock = threading.Lock()  # 发送锁，避免多线程同时写
 
     def start(self):
         if self.running:
@@ -41,8 +43,10 @@ class HybridBCIClient:
 
     def stop(self):
         self.running = False
-        if self.sock:
-            self.sock.close()
+        with self._send_lock:
+            if self.sock:
+                self.sock.close()
+                self.sock = None
         if self.thread:
             self.thread.join(timeout=2)
         logger.info("客户端已停止")
@@ -60,24 +64,49 @@ class HybridBCIClient:
 
     def _connect(self):
         """建立 TCP 连接，但不主动发送任何消息（等待平台先发）"""
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(5.0)
-        self.sock.connect((self.host, self.port))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5.0)
+        sock.connect((self.host, self.port))
+        with self._send_lock:
+            self.sock = sock
         logger.info(f"已连接到 {self.host}:{self.port}")
 
     def _send_json(self, data: dict):
         """发送 JSON 消息，每条消息以换行符结束"""
-        if self.sock:
-            message = json.dumps(data, ensure_ascii=False) + "\n"
-            self.sock.send(message.encode('utf-8'))
-            logger.debug(f"发送: {data}")
+        with self._send_lock:
+            if not self.sock:
+                logger.warning("socket 未连接，无法发送")
+                return False
+            try:
+                message = json.dumps(data, ensure_ascii=False) + "\n"
+                self.sock.send(message.encode('utf-8'))
+                logger.debug(f"发送: {data}")
+                return True
+            except Exception as e:
+                logger.error(f"发送失败: {e}")
+                return False
+
+    def send_event(self, event_id: int, extra_data: Optional[Dict] = None):
+        """
+        向平台发送打标事件 (ipc_event)
+        :param event_id: 整数事件ID，例如 100 表示训练完成
+        :param extra_data: 可选，但平台标准协议只接受 event 字段，extra 不会解析，仅用于日志
+        """
+        msg = {"msg": "ipc_event", "event": event_id}
+        if extra_data:
+            logger.info(f"发送事件 {event_id}, 附加数据: {extra_data} (平台可能不接收额外字段)")
+        return self._send_json(msg)
 
     def _handle_messages(self):
         """循环接收消息，按行解析"""
         buffer = ""
-        while self.running and self.sock:
+        while self.running:
+            with self._send_lock:
+                sock = self.sock
+            if not sock:
+                break
             try:
-                data = self.sock.recv(4096).decode('utf-8')
+                data = sock.recv(4096).decode('utf-8')
                 if not data:
                     logger.warning("连接已关闭（recv 空）")
                     break
@@ -103,12 +132,10 @@ class HybridBCIClient:
 
         msg_type = msg.get("msg")
         if msg_type == "ipc_user_info":
-            # 平台发来用户信息，此时需要回复窗口句柄
             logger.info(f"收到平台用户信息: {msg.get('user_name')}, 布局模式: {msg.get('layout_type')}")
-            # 保存可能存在的患者ID（如果平台提供了）
             if "patient_id" in msg:
                 self.patient_id = msg["patient_id"]
-            # 回复窗口句柄（0 表示无图形界面）
+            # 回复窗口句柄
             reply = {"msg": "ipc_user_info", "window": 0}
             self._send_json(reply)
             logger.info("已回复 window=0")
@@ -119,11 +146,17 @@ class HybridBCIClient:
         elif msg_type == "ipc_set_visible":
             visible = msg.get("visible", True)
             logger.info(f"平台要求窗口可见性: {visible}")
-            # 可以在此控制自己的窗口显隐，不需要回复
+            # 无需回复
 
         elif msg_type == "ipc_exit":
             logger.info("收到退出指令，客户端即将停止")
             self.stop()
+
+        elif msg_type == "ipc_event":
+            # 平台回复的打标成功确认
+            event_id = msg.get("event")
+            start_time = msg.get("start")
+            logger.info(f"平台确认事件 {event_id} 已处理, 时间: {start_time}")
 
         else:
             logger.debug(f"忽略未处理消息类型: {msg_type}")
