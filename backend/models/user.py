@@ -37,7 +37,6 @@ class Patient(db.Model):
 
     # 关联关系（方便通过患者对象直接访问训练数据和评估数据）
     trainings = db.relationship('TrainingData', backref='patient', lazy=True)
-    assessments = db.relationship('StageAssessment', backref='patient', lazy=True)
 
     def check_password(self, password):
         """

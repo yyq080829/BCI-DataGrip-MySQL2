@@ -1,23 +1,20 @@
 """
 训练数据接口
 POST /api/training/save    - 存储Unity游戏结束后的得分、时长
-POST /api/training/upload  - 上传训练实时数据
 GET  /api/training/history - 查询训练历史
 GET  /api/training/stats   - 训练数据统计
 """
 
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from models.training import TrainingData, GameLevel
 from extensions import db
 from datetime import datetime, timedelta
 from sqlalchemy import func
 
-training_bp = Blueprint('training', __name__)
+training_bp = Blueprint('training', __name__, url_prefix='/api/training')
 
 
 @training_bp.route('/save', methods=['POST'])
-@jwt_required()
 def save_training_result():
     """
     存储Unity游戏结束后的结果（得分、时长等）
@@ -36,14 +33,14 @@ def save_training_result():
     }
     """
     try:
-        current_user_id = get_jwt_identity()
-        claims = get_jwt()
-
-        # 只有患者可以保存训练数据
-        if claims.get('role') != 'patient':
-            return jsonify({'code': 403, 'message': '只有患者可以保存训练数据'}), 403
-
         data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'message': '请求数据为空'}), 400
+
+        patient_id = data.get('patient_id')
+        level_id = data.get('level_id')
+        if not patient_id or not level_id:
+            return jsonify({'code': 400, 'message': '缺少 patient_id 或 level_id'}), 400
 
         # 检查关卡是否存在
         level = GameLevel.query.get(data.get('level_id'))
@@ -52,20 +49,17 @@ def save_training_result():
 
         # 判断是否达标（根据关卡目标角度）
         is_qualified = False
-        if level.game_name == '星际翼航':
-            actual_angle = data.get('shoulder_abduction', 0)
-            is_qualified = actual_angle >= float(level.target_angle) - float(level.angle_tolerance)
-        elif level.game_name == '肘伸展采水晶':
-            actual_angle = data.get('elbow_extension', 0)
-            is_qualified = actual_angle >= float(level.target_angle) - float(level.angle_tolerance)
-        elif level.game_name == '星光舞台':
+        if level.game_name == '星光舞台':
             actual_angle = data.get('forearm_rotation', 0)
             is_qualified = actual_angle >= float(level.target_angle) - float(level.angle_tolerance)
+        else:
+            # 其他游戏（如果出现）默认不达标
+            is_qualified = False
 
         # 创建训练记录
         training = TrainingData(
-            patient_id=current_user_id,
-            level_id=data.get('level_id'),
+            patient_id=patient_id,
+            level_id=level_id,
             train_time=datetime.now(),
             shoulder_abduction=data.get('shoulder_abduction'),
             elbow_extension=data.get('elbow_extension'),
@@ -75,7 +69,7 @@ def save_training_result():
             game_score=data.get('score', 0),
             compensation=data.get('compensation', '无'),
             compensation_score=data.get('compensation_score', 100),
-            device_type=data.get('device_type', 'AR手机')
+            device_type=data.get('device_type', 'Unity')
         )
 
         db.session.add(training)
@@ -97,7 +91,6 @@ def save_training_result():
 
 
 @training_bp.route('/history', methods=['GET'])
-@jwt_required()
 def get_training_history():
     """
     查询训练历史
@@ -108,19 +101,9 @@ def get_training_history():
         limit: 返回条数限制（默认50条）
     """
     try:
-        current_user_id = get_jwt_identity()
-        claims = get_jwt()
-        role = claims.get('role')
-
-        # 确定查询的患者ID
-        if role == 'patient':
-            patient_id = current_user_id
-        elif role == 'doctor':
-            patient_id = request.args.get('patient_id')
-            if not patient_id:
-                return jsonify({'code': 400, 'message': '请指定患者ID'}), 400
-        else:
-            return jsonify({'code': 403, 'message': '无权访问'}), 403
+        patient_id = request.args.get('patient_id')
+        if not patient_id:
+            return jsonify({'code': 400, 'message': '缺少 patient_id'}), 400
 
         days = request.args.get('days', 30, type=int)
         limit = request.args.get('limit', 50, type=int)
@@ -149,19 +132,12 @@ def get_training_history():
 
 
 @training_bp.route('/stats', methods=['GET'])
-@jwt_required()
 def get_training_stats():
     """训练数据统计"""
     try:
-        current_user_id = get_jwt_identity()
-        claims = get_jwt()
-
-        if claims.get('role') == 'patient':
-            patient_id = current_user_id
-        else:
-            patient_id = request.args.get('patient_id')
-            if not patient_id:
-                return jsonify({'code': 400, 'message': '请指定患者ID'}), 400
+        patient_id = request.args.get('patient_id')
+        if not patient_id:
+            return jsonify({'code': 400, 'message': '缺少 patient_id'}), 400
 
         # 总训练次数
         total = TrainingData.query.filter_by(patient_id=patient_id).count()

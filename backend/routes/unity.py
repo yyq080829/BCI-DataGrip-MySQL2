@@ -3,6 +3,7 @@ Unity对接接口
 - POST /api/unity/send-eeg    : Unity上传EEG数据（备用）
 - GET  /api/unity/game-command: Unity轮询获取游戏控制指令（降级方案）
 - WebSocket /unity            : Unity实时通信（主要方式）
+- WebSocket /unity            : Unity实时通信（主要方式)
 """
 
 from flask import Blueprint, request, jsonify, current_app
@@ -110,7 +111,6 @@ def handle_training_result(data):
         return
 
     # 1. 保存到数据库（调用已有的 training/save 逻辑或直接存储）
-    from routes.training import save_training_result
     # 注意：save_training_result 是一个需要 JWT 认证的接口，这里简化调用
     # 实际我们可以直接创建 TrainingData 记录
     try:
