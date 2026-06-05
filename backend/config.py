@@ -10,8 +10,8 @@ class Config:
     # Flask密钥（用于session加密）
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'hand-to-guess-string'
 
-    # MySQL数据库连接（连接队友已创建的stroke_rehab_game数据库）
-    SQLALCHEMY_DATABASE_URI = 'mysql+pymysql://root:Ljy18718957842@localhost:3306/stroke_rehab_game'
+    # 数据库连接
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///./stroke_rehab_game.db'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ECHO = False
 
