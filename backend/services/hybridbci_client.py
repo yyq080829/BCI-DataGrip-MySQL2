@@ -1,5 +1,5 @@
 """
-HybridBCI 平台客户端 - 使用长度前缀协议（兼容官方 HNNKTcpSocketClient）
+HybridBCI 平台客户端 - 纯 Python 移植版（兼容官方 HNNKTcpSocketClient 协议）
 """
 import socket
 import struct
@@ -56,6 +56,7 @@ class HybridBCIClient:
         self.sock.connect((self.host, self.port))
         self._recv_buffer = b''
         logger.info(f"已连接到 {self.host}:{self.port}")
+        # 不要主动发送任何消息，等待平台先发
 
     def _send_json(self, data: dict):
         """发送JSON消息，格式：4字节大端长度 + JSON字符串"""
@@ -74,12 +75,14 @@ class HybridBCIClient:
         """向平台发送打标事件 (ipc_event)"""
         msg = {"msg": "ipc_event", "event": event_id}
         if extra_data:
-            logger.info(f"发送事件 {event_id}, 附加数据: {extra_data} (平台可能忽略)")
+            logger.info(f"发送事件 {event_id}, 附加数据: {extra_data}")
         self._send_json(msg)
 
     def _handle_messages(self):
+        """接收并解析长度前缀消息（完全按官方库方式）"""
         while self.running and self.sock:
             try:
+                # 确保有至少4字节头部
                 if len(self._recv_buffer) < 4:
                     chunk = self.sock.recv(4096)
                     if not chunk:
@@ -88,6 +91,7 @@ class HybridBCIClient:
                     self._recv_buffer += chunk
                     continue
 
+                # 读取负载长度
                 payload_len = struct.unpack('>I', self._recv_buffer[:4])[0]
                 total_needed = 4 + payload_len
                 if len(self._recv_buffer) < total_needed:
@@ -98,11 +102,15 @@ class HybridBCIClient:
                     self._recv_buffer += chunk
                     continue
 
+                # 提取完整消息
                 payload = self._recv_buffer[4:total_needed]
                 self._recv_buffer = self._recv_buffer[total_needed:]
 
+                # 解析并处理
                 try:
-                    msg = json.loads(payload.decode('utf-8'))
+                    msg_str = payload.decode('utf-8')
+                    logger.info(f"原始消息: {msg_str}")  # 调试打印
+                    msg = json.loads(msg_str)
                     self._dispatch_message(msg)
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON解析失败: {e} -> {payload[:100]}")
@@ -114,14 +122,14 @@ class HybridBCIClient:
 
     def _dispatch_message(self, msg: dict):
         msg_type = msg.get("msg")
-        if msg_type in ("ipcuser", "ipc_user_info"):
+        if msg_type in ("ipcuser", "ipc_user_info", "ipcuserinfo"):
             groupname = msg.get("groupname") or msg.get("group_name")
             layout = msg.get("layouttype") or msg.get("layout_type")
             logger.info(f"收到平台用户信息: {groupname}, 布局类型: {layout}")
-            # 回复相同的 msg 类型
-            reply = {"msg": msg_type, "window": 0}
+            # 关键：回复标准格式 "ipc_user_info" 和 window 句柄（任意正整数）
+            reply = {"msg": "ipc_user_info", "window": 12345}
             self._send_json(reply)
-            logger.info(f"已回复 {msg_type} window=0")
+            logger.info("已回复 ipc_user_info window=12345")
         elif msg_type == "ipc_algorithm_test":
             self._handle_algorithm_test(msg)
         elif msg_type == "ipc_set_visible":
