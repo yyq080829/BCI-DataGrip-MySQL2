@@ -1,17 +1,12 @@
 """
-Flask后端主入口
-功能：
-- 创建Flask应用
-- 初始化数据库、JWT、跨域等扩展
-- 注册所有API蓝图
-- 启动WebSocket服务
-- 自动创建表并插入默认游戏关卡（SQLite）
+Flask后端主入口 - P300执行器定制版 v5
 """
 
 from flask import Flask
 from flask_cors import CORS
 from config import Config
 from extensions import db, jwt, socketio
+
 
 def create_app():
     """创建并配置Flask应用"""
@@ -27,9 +22,8 @@ def create_app():
     with app.app_context():
         import models.user
         import models.training
-        db.create_all()   # 自动创建所有表
+        db.create_all()
 
-        # 插入默认游戏关卡（如果表为空）
         from models.training import GameLevel
         if GameLevel.query.count() == 0:
             default_level = GameLevel(
@@ -57,11 +51,31 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    # 启动服务器，监听所有网络接口，方便局域网内的设备访问
+
+    # 启动HybridBCI客户端
     from services.hybridbci_client import HybridBCIClient
 
-    bci_client = HybridBCIClient(socketio, host='127.0.0.1', port=8000)
+    bci_client = HybridBCIClient(
+        socketio,
+        host=Config.BCI_HOST,          # 平台的IP
+        port=Config.BCI_PORT,          # 平台的端口（8000）
+        window_handle=0,               # 后端无GUI窗口，必须传0
+        p300_grid_rows=Config.P300_GRID_ROWS,
+        p300_grid_cols=Config.P300_GRID_COLS
+    )
     bci_client.start()
     app.config['BCI_CLIENT'] = bci_client
-    print("[后端] HybridBCI 客户端已启动，等待平台数据...")
+
+    print("=" * 60)
+    print("  P300 执行器后端已启动 (v5)")
+    print(f"  Flask Web服务: 0.0.0.0:5000")
+    print(f"  HybridBCI 平台连接: {Config.BCI_HOST}:{Config.BCI_PORT}")
+    print(f"  P300 网格配置: {Config.P300_GRID_ROWS}行 x {Config.P300_GRID_COLS}列")
+    print("  输出格式:")
+    print("    绿色频闪 → 0")
+    print("    红色闪烁 → 1 (row,col)  例如: 1 (2,3)")
+    print("=" * 60)
+
+    #   关键：Flask 监听 5000 端口，不是 8000！
+    #    8000 是平台端口，BCI客户端连的是平台的8000
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)

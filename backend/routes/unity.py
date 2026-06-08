@@ -1,15 +1,23 @@
 """
 Unity对接接口
-- POST /api/unity/send-eeg    : Unity上传EEG数据（备用）
-- GET  /api/unity/game-command: Unity轮询获取游戏控制指令（降级方案）
-- WebSocket /unity            : Unity实时通信（主要方式）
-- WebSocket /unity            : Unity实时通信（主要方式)
+- POST /api/unity/send-eeg       : Unity上传EEG数据（备用）
+- GET  /api/unity/game-command   : Unity轮询获取游戏控制指令（降级方案）
+- WebSocket /unity               : Unity实时通信（主要方式）
+
+P300 新增事件:
+- p300_flash : Unity上报闪烁事件（绿色频闪/红色闪烁）
+- p300_start : Unity通知P300范式开始
+- p300_stop  : Unity通知P300范式结束
+
+实验记录上报:
+- p300_stop 时自动向平台上报实验记录数据
 """
 
 from flask import Blueprint, request, jsonify, current_app
 from flask_socketio import emit
 from extensions import socketio, db
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +25,14 @@ unity_bp = Blueprint('unity', __name__)
 
 # 存储患者ID与WebSocket会话ID的映射
 patient_sid_map = {}
+
+# P300 范式运行状态
+p300_running = False
+p300_flash_count = 0
+p300_start_time = 0
+p300_target_count = 0
+p300_nontarget_count = 0
+
 
 # ------------------------------------------------------------------
 # HTTP 接口（降级备用）
@@ -26,7 +42,6 @@ def receive_eeg_from_unity():
     """接收Unity端传来的脑电数据（备用）"""
     try:
         data = request.get_json()
-        # 这里可以处理Unity直接上传的EEG数据（若需要）
         return jsonify({'code': 200, 'message': '数据已接收', 'data': data}), 200
     except Exception as e:
         return jsonify({'code': 500, 'message': f'接收失败: {str(e)}'}), 500
@@ -35,127 +50,212 @@ def receive_eeg_from_unity():
 @unity_bp.route('/game-command', methods=['GET'])
 def get_game_command():
     """Unity轮询获取游戏控制指令（降级方案）"""
-    # 简单返回idle，实际使用中推荐WebSocket推送
-    return jsonify({
-        'code': 200,
-        'data': {'action': 'idle', 'parameters': {}}
-    }), 200
+    return jsonify({'code': 200, 'data': {'cmd': 'idle', 'param': ''}}), 200
 
 
 # ------------------------------------------------------------------
 # WebSocket 事件处理
 # ------------------------------------------------------------------
 @socketio.on('connect', namespace='/unity')
-def handle_unity_connect():
-    """Unity WebSocket 连接建立"""
-    logger.info(f'[Unity] 客户端 {request.sid} 已连接')
-    emit('connected', {'status': 'ok', 'message': 'Connected to backend'})
+def on_unity_connect():
+    """Unity客户端连接"""
+    logger.info('[Unity] 客户端已连接')
 
 
 @socketio.on('disconnect', namespace='/unity')
-def handle_unity_disconnect():
-    """Unity WebSocket 断开连接，清理映射"""
+def on_unity_disconnect():
+    """Unity客户端断开"""
+    logger.info('[Unity] 客户端已断开')
+    # 清理映射
     for pid, sid in list(patient_sid_map.items()):
         if sid == request.sid:
             del patient_sid_map[pid]
-            logger.info(f'[Unity] 患者 {pid} 的连接已断开')
             break
-    logger.info(f'[Unity] 客户端 {request.sid} 已断开')
 
 
-@socketio.on('register', namespace='/unity')
-def handle_register(data):
+@socketio.on('register_patient', namespace='/unity')
+def on_register_patient(data):
     """
-    Unity 连接后必须发送注册消息，绑定患者ID
-    消息格式: { "patient_id": "202505001" }
+    Unity注册患者ID
+
+    请求格式: {"patient_id": "202505001"}
     """
     patient_id = data.get('patient_id')
-    if not patient_id:
-        emit('error', {'message': 'Missing patient_id'})
-        return
-
-    # 如果该患者之前有旧连接，覆盖
-    if patient_id in patient_sid_map:
-        old_sid = patient_sid_map[patient_id]
-        logger.info(f'[Unity] 患者 {patient_id} 已有旧连接 {old_sid}，将被覆盖')
-    patient_sid_map[patient_id] = request.sid
-    logger.info(f'[Unity] 患者 {patient_id} 已绑定到会话 {request.sid}')
-    emit('registered', {'status': 'ok', 'patient_id': patient_id})
+    if patient_id:
+        patient_sid_map[patient_id] = request.sid
+        logger.info(f'[Unity] 患者注册: {patient_id}')
+        emit('register_ack', {'status': 'ok', 'patient_id': patient_id})
+    else:
+        emit('register_ack', {'status': 'error', 'message': '缺少patient_id'})
 
 
-@socketio.on('eeg_stream', namespace='/unity')
-def handle_eeg_stream(data):
-    """Unity 主动上传的实时脑电数据流（可选）"""
-    logger.info(f'[Unity] 收到EEG数据流: {data}')
-    # 可在此处将数据转发给平台（如 ipc_device_data 协议），目前仅记录
-
-
-# ==================== 新增：接收训练结果并反馈给平台 ====================
-@socketio.on('training_result', namespace='/unity')
-def handle_training_result(data):
+# ------------------------------------------------------------------
+# P300 闪烁事件
+# ------------------------------------------------------------------
+@socketio.on('p300_flash', namespace='/unity')
+def on_p300_flash(data):
     """
-    Unity 游戏结束时发送训练结果
-    消息格式示例:
+    Unity上报P300闪烁事件
+
+    请求格式:
+    {
+        "is_target": true,     // true=红色闪烁(目标), false=绿色频闪(非目标)
+        "row": 2,              // 行号(1-based)
+        "col": 3               // 列号(1-based)
+    }
+
+    后端终端输出:
+    - 绿色频闪 → 0
+    - 红色闪烁 → 1 (row,col)
+    """
+    global p300_flash_count, p300_target_count, p300_nontarget_count
+
+    is_target = data.get('is_target', False)
+    row = data.get('row', 0)
+    col = data.get('col', 0)
+
+    p300_flash_count += 1
+
+    bci_client = current_app.config.get('BCI_CLIENT')
+    if bci_client and hasattr(bci_client, 'send_p300_marker'):
+        bci_client.send_p300_marker(is_target=is_target, row=row, col=col)
+
+    if is_target:
+        p300_target_count += 1
+    else:
+        p300_nontarget_count += 1
+
+    emit('p300_flash_ack', {'status': 'ok', 'flash_count': p300_flash_count})
+
+
+@socketio.on('p300_start', namespace='/unity')
+def on_p300_start(data):
+    """
+    Unity通知P300范式开始
+
+    请求格式:
+    {
+        "patient_id": "202505001",
+        "grid_rows": 3,
+        "grid_cols": 4
+    }
+    """
+    global p300_running, p300_flash_count, p300_start_time
+    global p300_target_count, p300_nontarget_count
+
+    patient_id = data.get('patient_id')
+    grid_rows = data.get('grid_rows', 3)
+    grid_cols = data.get('grid_cols', 4)
+
+    p300_running = True
+    p300_flash_count = 0
+    p300_target_count = 0
+    p300_nontarget_count = 0
+    p300_start_time = time.time()
+
+    # 注册患者
+    if patient_id:
+        patient_sid_map[patient_id] = request.sid
+
+    print("=" * 50)
+    print("  P300 范式开始")
+    print(f"  患者: {patient_id}")
+    print(f"  网格: {grid_rows}行 x {grid_cols}列")
+    print("  输出格式: 绿色频闪→0, 红色闪烁→1 (row,col)")
+    print("=" * 50)
+
+    logger.info(f'[P300] 范式开始: patient={patient_id}, grid={grid_rows}x{grid_cols}')
+    emit('p300_start_ack', {'status': 'ok'})
+
+
+@socketio.on('p300_stop', namespace='/unity')
+def on_p300_stop(data):
+    """
+    Unity通知P300范式结束
+
+    请求格式:
+    {
+        "patient_id": "202505001",
+        "score": 85,
+        "accuracy": 0.75
+    }
+
+    同时向平台上报实验记录数据
+    """
+    global p300_running
+
+    patient_id = data.get('patient_id')
+    score = data.get('score', 0)
+    accuracy = data.get('accuracy', 0.0)
+    duration = int(time.time() - p300_start_time) if p300_start_time else 0
+
+    p300_running = False
+
+    print("=" * 50)
+    print("  P300 范式结束")
+    print(f"  患者: {patient_id}")
+    print(f"  总闪烁次数: {p300_flash_count}")
+    print(f"  目标刺激: {p300_target_count}次")
+    print(f"  非目标刺激: {p300_nontarget_count}次")
+    print(f"  得分: {score}")
+    print(f"  准确率: {accuracy}")
+    print(f"  时长: {duration}秒")
+    print("=" * 50)
+
+    # ★ 关键：向平台上报实验记录 ★
+    bci_client = current_app.config.get('BCI_CLIENT')
+    if bci_client and hasattr(bci_client, 'send_experiment_data'):
+        bci_client.send_experiment_data(
+            experiment_type="p300",
+            duration=duration,
+            score=score,
+            accuracy=accuracy,
+            extra_data={
+                'patient_id': patient_id,
+                'flash_count': p300_flash_count,
+                'target_count': p300_target_count,
+                'nontarget_count': p300_nontarget_count
+            }
+        )
+        logger.info(f'[P300] 已向平台上报实验记录')
+    else:
+        logger.warning('[P300] BCI客户端未启动，无法上报实验记录')
+
+    emit('p300_stop_ack', {'status': 'ok', 'duration': duration})
+
+
+# ------------------------------------------------------------------
+# 训练结果
+# ------------------------------------------------------------------
+@socketio.on('training_result', namespace='/unity')
+def on_training_result(data):
+    """
+    Unity上传训练结果
+
+    请求格式:
     {
         "patient_id": "202505001",
         "level_id": 1,
         "score": 85,
-        "duration": 300,
-        "accuracy": 92.5,
-        "is_qualified": true
+        "duration": 300
     }
     """
     patient_id = data.get('patient_id')
-    if not patient_id:
-        emit('error', {'message': 'Missing patient_id'})
-        return
+    logger.info(f'[Unity] 收到训练结果: patient={patient_id}, data={data}')
 
-    # 1. 保存到数据库（调用已有的 training/save 逻辑或直接存储）
-    # 注意：save_training_result 是一个需要 JWT 认证的接口，这里简化调用
-    # 实际我们可以直接创建 TrainingData 记录
-    try:
-        from models.training import TrainingData, GameLevel
-        level_id = data.get('level_id')
-        level = GameLevel.query.get(level_id) if level_id else None
-        if level:
-            new_record = TrainingData(
-                patient_id=patient_id,
-                level_id=level_id,
-                game_score=data.get('score', 0),
-                action_score=data.get('score', 0),  # 简化
-                is_qualified=data.get('is_qualified', False),
-                compensation=data.get('compensation', '无'),
-                compensation_score=data.get('compensation_score', 100),
-                device_type='Unity'
-            )
-            db.session.add(new_record)
-            db.session.commit()
-            logger.info(f'[Unity] 训练结果已保存: patient={patient_id}, score={data.get("score")}')
-        else:
-            logger.warning(f'[Unity] 关卡不存在: level_id={level_id}')
-    except Exception as e:
-        logger.error(f'[Unity] 保存训练结果失败: {e}')
-        db.session.rollback()
+    # 向平台发送事件
+    bci_client = current_app.config.get('BCI_CLIENT')
+    if bci_client and hasattr(bci_client, 'send_event'):
+        event_id = 100
+        bci_client.send_event(event_id, extra_data={
+            'patient_id': patient_id,
+            'score': data.get('score'),
+            'duration': data.get('duration')
+        })
+        logger.info(f'[Unity] 已向平台发送事件 {event_id}')
+    else:
+        logger.warning('[Unity] BCI客户端未启动或不支持send_event')
 
-    # 2. 通过 HybridBCI 客户端向平台发送事件（如果客户端已连接）
-    try:
-        bci_client = current_app.config.get('BCI_CLIENT')
-        if bci_client and hasattr(bci_client, 'send_event'):
-            # 自定义事件编号：例如 100 表示训练完成，可携带额外数据
-            # 注意平台只接受整数 event id
-            event_id = 100
-            bci_client.send_event(event_id, extra_data={
-                'patient_id': patient_id,
-                'score': data.get('score'),
-                'duration': data.get('duration')
-            })
-            logger.info(f'[Unity] 已向平台发送事件 {event_id}')
-        else:
-            logger.warning('[Unity] BCI客户端未启动或不支持send_event')
-    except Exception as e:
-        logger.error(f'[Unity] 向平台发送事件失败: {e}')
-
-    # 3. 回复 Unity 确认
     emit('training_result_ack', {'status': 'ok', 'message': '数据已接收'})
 
 

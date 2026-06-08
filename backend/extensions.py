@@ -9,4 +9,4 @@ from flask_socketio import SocketIO
 # 创建扩展实例（不绑定app）
 db = SQLAlchemy()
 jwt = JWTManager()
-socketio = SocketIO(cors_allowed_origins="*")
+socketio = SocketIO(cors_allowed_origins="*", async_mode='eventlet')
