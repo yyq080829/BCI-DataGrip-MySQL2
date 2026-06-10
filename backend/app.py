@@ -22,6 +22,7 @@ def create_app():
     with app.app_context():
         import models.user
         import models.training
+        import models.questionnaire
         db.create_all()
 
         from models.training import GameLevel
@@ -43,9 +44,11 @@ def create_app():
     # 注册蓝图（API路由）
     from routes.training import training_bp
     from routes.unity import unity_bp
+    from routes.questionnaire import questionnaire_bp
 
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(unity_bp, url_prefix='/api/unity')
+    app.register_blueprint(questionnaire_bp, url_prefix='/api/questionnaire')
     return app
 
 
