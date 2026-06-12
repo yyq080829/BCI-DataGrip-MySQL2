@@ -21,9 +21,8 @@ class Config:
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-key-2025')
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
 
-    # CORS跨域配置（允许前端和Unity访问）
-    CORS_ORIGINS = ['http://localhost:3000', 'http://localhost:8080',
-                    'http://localhost:5000', 'http://172.17.37.19:5000']
+    # CORS跨域配置（允许前端、Unity和问卷页面访问）
+    CORS_ORIGINS = '*'
 
     # 文件上传配置
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024
