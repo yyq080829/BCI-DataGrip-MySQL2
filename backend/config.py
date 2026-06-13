@@ -12,8 +12,19 @@ class Config:
     # Flask密钥（用于session加密）
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'hand-to-guess-string'
 
-    # 数据库连接
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///database.db'
+    # 数据库连接（MySQL）
+    # 格式: mysql+pymysql://用户名:密码@主机地址:端口/数据库名
+    # 请根据实际MySQL配置修改以下参数
+    MYSQL_USER = os.environ.get('MYSQL_USER', 'root')
+    MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', '123456')     # ← 改成你的MySQL密码
+    MYSQL_HOST = os.environ.get('MYSQL_HOST', '127.0.0.1')
+    MYSQL_PORT = os.environ.get('MYSQL_PORT', '3306')
+    MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE', 'kangyou_zhichuang')  # ← 改成你的数据库名
+
+    SQLALCHEMY_DATABASE_URI = (
+        f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@'
+        f'{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4'
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ECHO = False
 

@@ -45,10 +45,12 @@ def create_app():
     from routes.training import training_bp
     from routes.unity import unity_bp
     from routes.questionnaire import questionnaire_bp
+    from routes.auth import auth_bp
 
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(unity_bp, url_prefix='/api/unity')
     app.register_blueprint(questionnaire_bp, url_prefix='/api/questionnaire')
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
     return app
 
 
