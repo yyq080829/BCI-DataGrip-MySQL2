@@ -1,7 +1,8 @@
 """
-训练数据模型
+训练与评估数据模型
 train_real_time_data - 训练实时数据表
 game_level_config - 游戏关卡配置表
+stage_assessment - 阶段评估表 (新增补全)
 """
 
 from datetime import datetime
@@ -28,8 +29,8 @@ class GameLevel(db.Model):
             'game_name': self.game_name,
             'train_part': self.train_part,
             'level_name': self.level_name,
-            'target_angle': float(self.target_angle),
-            'angle_tolerance': float(self.angle_tolerance),
+            'target_angle': float(self.target_angle) if self.target_angle else None,
+            'angle_tolerance': float(self.angle_tolerance) if self.angle_tolerance else None,
             'train_duration': self.train_duration,
             'difficulty': self.difficulty,
             'game_remark': self.game_remark
@@ -73,4 +74,46 @@ class TrainingData(db.Model):
             'game_score': self.game_score,
             'compensation': self.compensation,
             'compensation_score': self.compensation_score
+        }
+
+
+class StageAssessment(db.Model):
+    """阶段评估模型 (对应 stage_assessment 表)"""
+    __tablename__ = 'stage_assessment'
+
+    assess_id = db.Column(db.Integer, primary_key=True, autoincrement=True, comment='评估ID')
+    patient_id = db.Column(db.String(20), db.ForeignKey('patient_info.patient_id'), nullable=False, comment='患者ID')
+    assess_time = db.Column(db.DateTime, default=datetime.now, comment='评估时间')
+    assess_cycle = db.Column(db.String(20), nullable=False, comment='评估周期(如: 第1周)')
+
+    # 角度 averages
+    avg_shoulder_angle = db.Column(db.Numeric(5, 2), comment='平均肩外展角度')
+    avg_elbow_angle = db.Column(db.Numeric(5, 2), comment='平均肘伸展角度')
+    avg_forearm_angle = db.Column(db.Numeric(5, 2), comment='平均前臂旋转角度')
+
+    # 评分指标
+    qualified_rate = db.Column(db.Numeric(5, 2), comment='达标率(%)')
+    avg_compensation_score = db.Column(db.Integer, comment='平均代偿评分')
+    FMA_UE_score = db.Column(db.Integer, default=0, comment='FMA-UE评分')
+    ARAT_score = db.Column(db.Integer, default=0, comment='ARAT评分')
+
+    # 医生结论
+    doctor_evaluation = db.Column(db.Text, comment='医生评价')
+    next_train_plan = db.Column(db.Text, comment='下一步训练计划')
+
+    def to_dict(self):
+        return {
+            'assess_id': self.assess_id,
+            'patient_id': self.patient_id,
+            'assess_time': self.assess_time.strftime('%Y-%m-%d %H:%M:%S') if self.assess_time else None,
+            'assess_cycle': self.assess_cycle,
+            'avg_shoulder_angle': float(self.avg_shoulder_angle) if self.avg_shoulder_angle else None,
+            'avg_elbow_angle': float(self.avg_elbow_angle) if self.avg_elbow_angle else None,
+            'avg_forearm_angle': float(self.avg_forearm_angle) if self.avg_forearm_angle else None,
+            'qualified_rate': float(self.qualified_rate) if self.qualified_rate else None,
+            'avg_compensation_score': self.avg_compensation_score,
+            'FMA_UE_score': self.FMA_UE_score,
+            'ARAT_score': self.ARAT_score,
+            'doctor_evaluation': self.doctor_evaluation,
+            'next_train_plan': self.next_train_plan
         }

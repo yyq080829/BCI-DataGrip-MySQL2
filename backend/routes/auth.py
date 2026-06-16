@@ -21,7 +21,7 @@
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
-from models.user import Patient, Doctor, Escort
+from models.user import Patient, Doctor   # 移除了 Escort
 from extensions import db
 from datetime import datetime
 import random
@@ -31,7 +31,6 @@ auth_bp = Blueprint('auth', __name__)
 def generate_patient_id():
     """生成格式为 年月日+三位序号 的患者ID，例如 20250515001"""
     today = datetime.now().strftime('%Y%m%d')
-    # 查询今天已经注册的患者数量
     count = Patient.query.filter(Patient.patient_id.like(f'{today}%')).count()
     return f'{today}{count + 1:03d}'
 
@@ -45,7 +44,7 @@ def generate_doctor_id():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     """
-    统一登录接口，支持患者、医生、管理员（或陪同人员）
+    统一登录接口，支持患者、医生、管理员
     前端发送的 JSON 包含: username, password, userType (可选)
     """
     try:
@@ -86,23 +85,20 @@ def login():
                 user = Patient.query.filter_by(username=username).first()
                 if user and user.check_password(password):
                     role = 'patient'
-                else:
-                    user = Escort.query.filter_by(username=username).first()
-                    if user and user.check_password(password):
-                        role = 'companion'
+                # 注意：陪同人员(Escort)功能已移除，不再处理
+
         if not user or not role:
             return jsonify({'code': 401, 'message': '用户名或密码错误'}), 401
 
-        # 生成 JWT token，负载中包含用户ID和角色
+        # 生成 JWT token
         access_token = create_access_token(
-            identity=user.to_dict()['user_id'],   # 不同模型统一返回 user_id 字段
+            identity=user.to_dict()['user_id'],
             additional_claims={
                 'role': role,
                 'username': username
             }
         )
 
-        # 返回登录成功信息，格式兼容前端原有数据结构（但前端原本没有解析 token，这里保留）
         return jsonify({
             'code': 200,
             'message': '登录成功',
@@ -131,7 +127,6 @@ def register():
         "confirmPassword": "123456",
         "register-user-type": "patient"   // 或 "doctor"
     }
-    注意：前端缺少 patient_name, gender, age 等字段，这里使用默认值填充
     """
     try:
         data = request.get_json()
@@ -142,38 +137,33 @@ def register():
         email = data.get('email')
         password = data.get('password')
         confirm_password = data.get('confirmPassword')
-        user_type = data.get('register-user-type')   # 'patient' 或 'doctor'
+        user_type = data.get('register-user-type')
 
-        # 基础字段校验
         if not all([username, email, password, confirm_password, user_type]):
             return jsonify({'code': 400, 'message': '缺少必要参数'}), 400
 
         if password != confirm_password:
             return jsonify({'code': 400, 'message': '两次输入的密码不一致'}), 400
 
-        # 根据注册类型分别处理
         if user_type == 'patient':
-            # 检查用户名是否已被患者占用
             if Patient.query.filter_by(username=username).first():
                 return jsonify({'code': 400, 'message': '用户名已存在'}), 400
 
             patient_id = generate_patient_id()
-
-            # 创建患者记录，缺失字段使用默认值
             new_patient = Patient(
                 patient_id=patient_id,
-                patient_name=username,          # 默认用用户名作为姓名
-                gender='男',                    # 默认性别，建议前端后续补充
-                age=0,                          # 默认年龄，前端可后续修改
-                affected_side='左',             # 默认患侧
-                stroke_type='缺血性',            # 默认卒中类型
+                patient_name=username,
+                gender='男',
+                age=0,
+                affected_side='左',
+                stroke_type='缺血性',
                 admission_time=datetime.now(),
-                doctor_name='',                 # 主治医生姓名，后续可关联
-                phone='',                       # 联系方式，后续可补充
-                remark='',                      # 备注
+                doctor_name='',
+                phone='',
+                remark='',
                 username=username,
-                pwd=password,                   # 明文存储（开发阶段），生产环境务必使用哈希
-                doctor_id='',                   # 主治医生ID，后续可关联
+                pwd=password,
+                doctor_id='',
                 role='patient'
             )
             db.session.add(new_patient)
@@ -189,17 +179,14 @@ def register():
             }), 201
 
         elif user_type == 'doctor':
-            # 检查用户名是否已被医生占用
             if Doctor.query.filter_by(username=username).first():
                 return jsonify({'code': 400, 'message': '用户名已存在'}), 400
 
             doctor_id = generate_doctor_id()
-
             new_doctor = Doctor(
                 doctor_id=doctor_id,
                 doctor_name=username,
-                gender='男',               # 默认性别
-                department='康复科',       # 默认科室
+                department='康复科',
                 phone='',
                 username=username,
                 pwd=password,
@@ -240,9 +227,8 @@ def get_profile():
             user = Patient.query.get(current_user_id)
         elif role == 'doctor':
             user = Doctor.query.get(current_user_id)
-        elif role == 'companion':
-            user = Escort.query.get(current_user_id)
         else:
+            # 移除了 companion 角色
             return jsonify({'code': 400, 'message': '未知角色'}), 400
 
         if not user:

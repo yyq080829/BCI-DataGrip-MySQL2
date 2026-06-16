@@ -30,9 +30,6 @@ class QuestionnaireRecord(db.Model):
     # 时间
     submit_time = db.Column(db.DateTime, default=datetime.now, comment='提交时间')
 
-    # 关联
-    patient = db.relationship('Patient', backref='questionnaire_records')
-
     def to_dict(self):
         return {
             'record_id': self.record_id,
