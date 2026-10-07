@@ -1,5 +1,10 @@
 """
-Flask后端主入口 - 纯API版本（无Unity/BCI平台连接）
+Flask 后端主入口
+
+职责：
+  · 提供前端 API（认证 / 训练 / 问卷）
+  · 通过 WebSocket(/unity) 与 Unity 实时通信（实时训练角度、难度、反馈）
+  · 通过 HybridBCIBridge 与华南脑控 HybridBCI 平台 TCP 连接（算法结果 -> Unity，实验反馈落库）
 """
 
 from flask import Flask
@@ -7,8 +12,9 @@ from flask_cors import CORS
 from config import Config
 from extensions import db, jwt, socketio
 
+
 def create_app():
-    """创建并配置Flask应用"""
+    """创建并配置 Flask 应用"""
     app = Flask(__name__)
     app.config.from_object(Config)
 
@@ -63,14 +69,31 @@ def create_app():
             db.session.commit()
             print("已插入默认游戏关卡（初阶关、中阶关、高阶关）")
 
-    # 注册蓝图（仅保留前端需要的API）
+    # 注册蓝图
     from routes.training import training_bp
     from routes.questionnaire import questionnaire_bp
     from routes.auth import auth_bp
+    from routes.unity import unity_bp
+    from routes.monitor import monitor_bp
 
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(questionnaire_bp, url_prefix='/api/questionnaire')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    app.register_blueprint(unity_bp)        # WebSocket 事件使用 /unity 命名空间
+    app.register_blueprint(monitor_bp)      # 后台实时监控页 /monitor
+
+    # 启动 HybridBCI 平台桥接（平台 <-> Unity <-> 数据库）
+    from services.hybridbci_client import HybridBCIBridge
+    bridge = HybridBCIBridge(
+        socketio=socketio,
+        app=app,
+        host=app.config['BCI_HOST'],
+        port=app.config['BCI_PORT'],
+        p300_grid_rows=app.config.get('P300_GRID_ROWS', 3),
+        p300_grid_cols=app.config.get('P300_GRID_COLS', 4),
+    )
+    bridge.start()
+    app.config['BCI_CLIENT'] = bridge
 
     return app
 
@@ -78,8 +101,9 @@ def create_app():
 if __name__ == '__main__':
     app = create_app()
     print("=" * 60)
-    print("  后端API服务已启动（无BCI/Unity连接）")
-    print(f"  Flask Web服务: 0.0.0.0:5000")
+    print("  后端服务已启动（Unity + HybridBCI 平台已接入）")
+    print(f"  Flask Web服务 : 0.0.0.0:5000")
+    print(f"  HybridBCI平台 : {app.config['BCI_HOST']}:{app.config['BCI_PORT']}")
     print("  可用接口:")
     print("    POST /api/auth/login")
     print("    POST /api/auth/register")
@@ -87,9 +111,10 @@ if __name__ == '__main__':
     print("    POST /api/training/save")
     print("    GET  /api/training/history")
     print("    GET  /api/training/stats")
+    print("    WS   /unity  (register_patient / training_frame / p300_*)")
+    print("    WS   /monitor (后台实时大臂角度监控页 /monitor)")
+    print("    GET  /monitor (大臂康复实时角度后台显示)")
     print("    GET  /api/questionnaire/questions")
     print("    POST /api/questionnaire/submit")
-    print("    GET  /api/questionnaire/history")
-    print("    GET  /api/questionnaire/latest")
     print("=" * 60)
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)

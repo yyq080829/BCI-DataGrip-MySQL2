@@ -11,6 +11,9 @@ P300 新增事件:
 
 实验记录上报:
 - p300_stop 时自动向平台上报实验记录数据
+
+大臂康复实时数据（直连，不经平台/脑电）:
+- training_frame : Unity 每帧上报肩外展等角度 -> 直接写 train_real_time_data -> 实时广播到 /monitor 后台
 """
 
 from flask import Blueprint, request, jsonify, current_app
@@ -257,6 +260,80 @@ def on_training_result(data):
         logger.warning('[Unity] BCI客户端未启动或不支持send_event')
 
     emit('training_result_ack', {'status': 'ok', 'message': '数据已接收'})
+
+
+# ------------------------------------------------------------------
+# 实时训练帧（接通 Unity 实时角度 / 难度 / 反馈 -> 数据库）
+# ------------------------------------------------------------------
+@socketio.on('training_frame', namespace='/unity')
+def on_training_frame(data):
+    """
+    Unity 实时上报单帧训练数据
+
+    请求格式:
+    {
+        "patient_id": "202505001",
+        "level_id": 1,                 // 关卡(决定目标角度/难度)
+        "shoulder_abduction": 58.5,    // 肩外展角度
+        "elbow_extension": 0.0,        // 肘伸展角度
+        "forearm_rotation": 90.0,      // 前臂旋转角度
+        "action_score": 8,             // 单动作得分
+        "is_qualified": true,          // 是否达标
+        "compensation": "无",          // 代偿动作
+        "compensation_score": 100,     // 代偿评分
+        "game_score": 80,              // 当前游戏得分
+        "device_type": "AR手机"        // 采集设备
+    }
+    """
+    from flask import current_app
+    from extensions import db, socketio
+    from models.training import TrainingData, GameLevel
+
+    patient_id = data.get('patient_id')
+    level_id = data.get('level_id')
+    if not patient_id or level_id is None:
+        emit('training_frame_ack', {'status': 'error', 'message': '缺少patient_id或level_id'})
+        return
+
+    with current_app.app_context():
+        try:
+            row = TrainingData(
+                patient_id=patient_id,
+                level_id=level_id,
+                shoulder_abduction=data.get('shoulder_abduction'),
+                elbow_extension=data.get('elbow_extension'),
+                forearm_rotation=data.get('forearm_rotation'),
+                action_score=data.get('action_score', 0),
+                is_qualified=data.get('is_qualified', False),
+                compensation=data.get('compensation'),
+                compensation_score=data.get('compensation_score', 100),
+                game_score=data.get('game_score', 0),
+                device_type=data.get('device_type', 'AR手机'),
+            )
+            db.session.add(row)
+            db.session.commit()
+
+            # 查询关卡目标角度，便于后台对比显示
+            level = GameLevel.query.get(level_id)
+            target_angle = float(level.target_angle) if level and level.target_angle is not None else None
+
+            # 回 ack 给 Unity（同一 /unity 会话）
+            emit('training_frame_ack', {'status': 'ok', 'data_id': row.data_id})
+
+            # ★ 大臂康复数据：直接 Unity -> 数据库，不经过脑电平台 ★
+            # 实时广播给后台监控页（/monitor 命名空间），用于实时显示大臂抬起角度
+            socketio.emit('arm_angle_update', {
+                'patient_id': patient_id,
+                'level_id': level_id,
+                'level_name': level.level_name if level else None,
+                'shoulder_abduction': float(row.shoulder_abduction) if row.shoulder_abduction is not None else None,
+                'target_angle': target_angle,
+                'is_qualified': row.is_qualified,
+                'train_time': row.train_time.strftime('%Y-%m-%d %H:%M:%S') if row.train_time else None,
+            }, namespace='/monitor')
+        except Exception as e:
+            db.session.rollback()
+            emit('training_frame_ack', {'status': 'error', 'message': str(e)})
 
 
 # ------------------------------------------------------------------

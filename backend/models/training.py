@@ -77,6 +77,33 @@ class TrainingData(db.Model):
         }
 
 
+class ExperimentRecord(db.Model):
+    """平台实验反馈记录模型（P300 / SSVEP / MI 等实验结果落库）"""
+    __tablename__ = 'experiment_record'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True, comment='记录ID')
+    patient_id = db.Column(db.String(20), db.ForeignKey('patient_info.patient_id'),
+                           nullable=False, comment='患者ID')
+    experiment_type = db.Column(db.String(30), comment='实验类型: p300/ssvep/mi...')
+    duration = db.Column(db.Integer, default=0, comment='实验时长(秒)')
+    score = db.Column(db.Integer, default=0, comment='得分')
+    accuracy = db.Column(db.Float, default=0.0, comment='准确率(0-1)')
+    extra_data = db.Column(db.Text, comment='附加信息(JSON)')
+    created_at = db.Column(db.DateTime, default=datetime.now, comment='创建时间')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'patient_id': self.patient_id,
+            'experiment_type': self.experiment_type,
+            'duration': self.duration,
+            'score': self.score,
+            'accuracy': self.accuracy,
+            'extra_data': self.extra_data,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None
+        }
+
+
 class StageAssessment(db.Model):
     """阶段评估模型 (对应 stage_assessment 表)"""
     __tablename__ = 'stage_assessment'
