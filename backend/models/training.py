@@ -1,8 +1,12 @@
 """
-训练与评估数据模型
-train_real_time_data - 训练实时数据表
-game_level_config - 游戏关卡配置表
-stage_assessment - 阶段评估表 (新增补全)
+训练与评估数据模型（4 张表）
+
+  game_level_config  - 游戏关卡配置表（每个关卡的目标角度/难度/时长）
+  train_real_time_data - 训练实时数据表（Unity 每帧上报的角度/得分都写这里）
+  experiment_record  - 平台实验反馈记录表（华南脑控平台返回的实验结果落库）
+  stage_assessment    - 阶段临床评估表（医生录入的阶段性评估）
+
+这些表由后端启动时 db.create_all() 自动创建；改表结构改这里，并同步 sql_files/。
 """
 
 from datetime import datetime
@@ -10,20 +14,23 @@ from extensions import db
 
 
 class GameLevel(db.Model):
-    """游戏关卡配置模型"""
+    """游戏关卡配置模型 —— 对应 game_level_config 表
+    """
+
     __tablename__ = 'game_level_config'
 
-    level_id = db.Column(db.Integer, primary_key=True, autoincrement=True, comment='关卡ID')
-    game_name = db.Column(db.String(50), nullable=False, comment='游戏名称')
-    train_part = db.Column(db.String(30), nullable=False, comment='训练部位')
-    level_name = db.Column(db.String(50), nullable=False, comment='关卡名称')
-    target_angle = db.Column(db.Numeric(5, 2), nullable=False, comment='目标角度')
-    angle_tolerance = db.Column(db.Numeric(5, 2), default=5.00, comment='角度容错')
-    train_duration = db.Column(db.Integer, nullable=False, comment='训练时长(秒)')
-    difficulty = db.Column(db.String(10), nullable=False, comment='难度等级')
-    game_remark = db.Column(db.String(200), comment='关卡说明')
+    level_id = db.Column(db.Integer, primary_key=True, autoincrement=True, comment='关卡ID（自增）')
+    game_name = db.Column(db.String(50), nullable=False, comment='游戏名称，如「星光舞台」')
+    train_part = db.Column(db.String(30), nullable=False, comment='训练部位，如「前臂旋前+旋后」')
+    level_name = db.Column(db.String(50), nullable=False, comment='关卡名称，如「初级节奏」')
+    target_angle = db.Column(db.Numeric(5, 2), nullable=False, comment='目标关节角度(°)——Unity 据此判定达标')
+    angle_tolerance = db.Column(db.Numeric(5, 2), default=5.00, comment='角度容错度(°)')
+    train_duration = db.Column(db.Integer, nullable=False, comment='单关训练时长(秒)')
+    difficulty = db.Column(db.String(10), nullable=False, comment='难度等级：初阶关/中阶关/高阶关')
+    game_remark = db.Column(db.String(200), comment='关卡规则说明')
 
     def to_dict(self):
+        """转 dict（数值字段转成 float 方便前端直接用）"""
         return {
             'level_id': self.level_id,
             'game_name': self.game_name,
@@ -38,28 +45,37 @@ class GameLevel(db.Model):
 
 
 class TrainingData(db.Model):
-    """训练实时数据模型"""
+    """训练实时数据模型 —— 对应 train_real_time_data 表
+
+    这是【量最大】的一张表：Unity 每上报一帧（training_frame）就插一行。
+    记录单次动作的角度、得分、是否达标、代偿情况等，用于后续统计与医生评估。
+    """
+
     __tablename__ = 'train_real_time_data'
 
     data_id = db.Column(db.BigInteger, primary_key=True, autoincrement=True, comment='数据ID')
     patient_id = db.Column(db.String(20), db.ForeignKey('patient_info.patient_id'), nullable=False, comment='患者ID')
-    level_id = db.Column(db.Integer, db.ForeignKey('game_level_config.level_id'), nullable=False, comment='关卡ID')
+    level_id = db.Column(db.Integer, db.ForeignKey('game_level_config.level_id'), nullable=False, comment='关卡ID（决定目标角度/难度）')
     train_time = db.Column(db.DateTime, default=datetime.now, comment='训练时间')
 
-    # 运动数据
-    shoulder_abduction = db.Column(db.Numeric(5, 2), comment='肩外展角度')
+    # ---- 运动学数据（单位：度）----
+    shoulder_abduction = db.Column(db.Numeric(5, 2), comment='肩外展角度（大臂抬起，第二个游戏实时上报的核心字段）')
     elbow_extension = db.Column(db.Numeric(5, 2), comment='肘伸展角度')
-    forearm_rotation = db.Column(db.Numeric(5, 2), comment='前臂旋转角度')
-    action_score = db.Column(db.Integer, default=0, comment='动作得分(0-10)')
+    forearm_rotation = db.Column(db.Numeric(5, 2), comment='前臂旋前/旋后角度')
+
+    # ---- 评分与反馈 ----
+    action_score = db.Column(db.Integer, default=0, comment='单动作得分(0-10)')
     is_qualified = db.Column(db.Boolean, default=False, comment='是否达标')
     game_score = db.Column(db.Integer, default=0, comment='游戏累计得分')
-    compensation = db.Column(db.String(50), comment='代偿动作类型')
-    compensation_score = db.Column(db.Integer, default=100, comment='代偿评分')
+    compensation = db.Column(db.String(50), comment='代偿动作类型：耸肩/躯干侧倾/腕屈曲/无')
+    compensation_score = db.Column(db.Integer, default=100, comment='代偿评分(100=无代偿，越低越严重)')
     device_type = db.Column(db.String(30), default='AR手机', comment='采集设备')
 
+    # 关联到关卡（多对一），可通过 self.level 直接拿到 GameLevel 对象
     level = db.relationship('GameLevel', backref='training_data')
 
     def to_dict(self):
+        """转 dict（关联出游戏名/关卡名，方便前端展示）"""
         return {
             'data_id': self.data_id,
             'patient_id': self.patient_id,
@@ -78,7 +94,12 @@ class TrainingData(db.Model):
 
 
 class ExperimentRecord(db.Model):
-    """平台实验反馈记录模型（P300 / SSVEP / MI 等实验结果落库）"""
+    """平台实验反馈记录模型 —— 对应 experiment_record 表
+
+    华南脑控 HybridBCI 平台在脑机实验（P300/SSVEP/MI）结束后会返回结果，
+    后端把结果“导出”一份写进这张表（详见 services/hybridbci_client.py）。
+    """
+
     __tablename__ = 'experiment_record'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True, comment='记录ID')
@@ -88,7 +109,7 @@ class ExperimentRecord(db.Model):
     duration = db.Column(db.Integer, default=0, comment='实验时长(秒)')
     score = db.Column(db.Integer, default=0, comment='得分')
     accuracy = db.Column(db.Float, default=0.0, comment='准确率(0-1)')
-    extra_data = db.Column(db.Text, comment='附加信息(JSON)')
+    extra_data = db.Column(db.Text, comment='附加信息(JSON 文本)')
     created_at = db.Column(db.DateTime, default=datetime.now, comment='创建时间')
 
     def to_dict(self):
@@ -105,7 +126,11 @@ class ExperimentRecord(db.Model):
 
 
 class StageAssessment(db.Model):
-    """阶段评估模型 (对应 stage_assessment 表)"""
+    """阶段评估模型 —— 对应 stage_assessment 表
+
+    由医生在阶段末录入：平均角度、达标率、FMA/ARAT 量表评分、后续计划等。
+    """
+
     __tablename__ = 'stage_assessment'
 
     assess_id = db.Column(db.Integer, primary_key=True, autoincrement=True, comment='评估ID')
@@ -116,13 +141,13 @@ class StageAssessment(db.Model):
     # 角度 averages
     avg_shoulder_angle = db.Column(db.Numeric(5, 2), comment='平均肩外展角度')
     avg_elbow_angle = db.Column(db.Numeric(5, 2), comment='平均肘伸展角度')
-    avg_forearm_angle = db.Column(db.Numeric(5, 2), comment='平均前臂旋转角度')
+    avg_forearm_angle = db.Column(db.Numeric(5, 2), comment='平均前臂旋前/旋后角度')
 
     # 评分指标
     qualified_rate = db.Column(db.Numeric(5, 2), comment='达标率(%)')
     avg_compensation_score = db.Column(db.Integer, comment='平均代偿评分')
-    FMA_UE_score = db.Column(db.Integer, default=0, comment='FMA-UE评分')
-    ARAT_score = db.Column(db.Integer, default=0, comment='ARAT评分')
+    FMA_UE_score = db.Column(db.Integer, default=0, comment='FMA-UE 上肢量表评分(0-66)')
+    ARAT_score = db.Column(db.Integer, default=0, comment='ARAT 上肢功能评分(0-57)')
 
     # 医生结论
     doctor_evaluation = db.Column(db.Text, comment='医生评价')

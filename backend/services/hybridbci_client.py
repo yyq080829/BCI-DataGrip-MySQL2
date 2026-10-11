@@ -1,9 +1,9 @@
 """
 华南脑控 HybridBCI 平台连接模块（纯 Python，无 Qt 依赖）
 
-参考官方 ipc_socket 协议：
+参考官方 IPC 协议：
     帧格式: [4 字节大端长度][UTF-8 JSON 负载]
-    平台(服务端) <-> 控制器(本后端) 双向通信
+    平台(TCP 服务端) <-> 本后端(控制器) 双向通信
 
 按官方「3 个 class」思路拆分（对应官方 HNNKTcpSocketClient + MainWindow）：
     1. IpcCodec             —— 帧编解码（对应官方 QDataStream 打包/解包）
@@ -11,7 +11,7 @@
     3. HybridBCIBridge      —— 业务桥接层（对应官方 MainWindow 的协议处理）
        · 平台 -> Unity：把算法结果翻译为游戏指令，经 WebSocket 推送给在线 Unity
        · Unity  -> 平台：把 p300 打标 / 实验记录上报给平台
-       · 反馈落库：训练与实验反馈参数写入数据库
+       · 反馈落库：训练与实验反馈参数写入数据库（experiment_record）
 """
 
 import json
@@ -27,22 +27,22 @@ logger = logging.getLogger(__name__)
 class IpcCodec:
     """IPC 帧编解码：帧 = 4 字节大端长度 + JSON 负载。
 
-    对应官方 HNNKTcpSocketClient 中用 QDataStream 写 uint32 长度再写负载的逻辑，
-    这里用纯 Python 的 struct 实现，且支持「多个包合并在一起」的情况。
+    对应官方 HNNKTcpSocketClient 用 QDataStream 写 uint32 长度再写负载的逻辑，
+    这里用纯 Python 的 struct 实现，且支持「多个包粘在一起」的情况（循环解包）。
     """
 
-    _HEADER = 4
-    _MAX_PAYLOAD = 10 * 1024 * 1024  # 安全上限 10MB
+    _HEADER = 4                       # 帧头长度（长度字段占 4 字节）
+    _MAX_PAYLOAD = 10 * 1024 * 1024   # 单帧安全上限 10MB，防止异常大包撑爆内存
 
     @staticmethod
     def encode(msg: dict) -> bytes:
-        """把 dict 编码为一帧字节。"""
+        """把 dict 编码为一帧字节（长度 + JSON）。"""
         payload = json.dumps(msg, ensure_ascii=False).encode('utf-8')
-        return struct.pack('>I', len(payload)) + payload
+        return struct.pack('>I', len(payload)) + payload   # '>I' = 大端无符号 4 字节
 
     @staticmethod
     def decode(buffer: bytes):
-        """尝试从 buffer 中解析出一个完整帧。
+        """尝试从 buffer 解出一帧完整 JSON。
 
         返回 (msg_dict, remaining_bytes)；数据不足一帧时返回 (None, buffer)。
         """
@@ -52,7 +52,7 @@ class IpcCodec:
         if length > IpcCodec._MAX_PAYLOAD:
             raise ValueError(f'IPC 负载过大: {length}')
         if len(buffer) < IpcCodec._HEADER + length:
-            return None, buffer
+            return None, buffer   # 还没收满一帧，等更多数据
         raw = buffer[IpcCodec._HEADER:IpcCodec._HEADER + length]
         msg = json.loads(raw.decode('utf-8'))
         return msg, buffer[IpcCodec._HEADER + length:]
@@ -62,7 +62,7 @@ class HybridBCIConnection:
     """TCP 传输层：连接平台、收发包、断线重连。
 
     对应官方 HNNKTcpSocketClient：只负责「连上 / 收发字节 / 断线重连」，
-    收到完整帧后通过 on_message 回调上抛，连接与断开通过回调通知业务层。
+    收到完整帧后通过 on_message 回调上抛，连接/断开通过回调通知业务层。
     """
 
     def __init__(self, host='127.0.0.1', port=8000, auto_reconnect=True,
@@ -70,15 +70,15 @@ class HybridBCIConnection:
         self.host = host
         self.port = port
         self.auto_reconnect = auto_reconnect
-        self._on_message = on_message
+        self._on_message = on_message          # 收到一帧完整 JSON 时回调
         self._on_connect = on_connect
         self._on_disconnect = on_disconnect
 
         self._sock = None
         self._running = False
         self._connected = False
-        self._buffer = b''
-        self._lock = threading.Lock()
+        self._buffer = b''                      # 收包缓冲区（可能含半包/粘包）
+        self._lock = threading.Lock()           # 发送加锁，避免多线程并发写乱
         self._thread = None
 
     @property
@@ -102,6 +102,7 @@ class HybridBCIConnection:
     # 内部主循环
     # ------------------------------------------------------------------
     def _run(self):
+        """连上 -> 收数据 -> 断线 -> （可选）重连，循环。"""
         while self._running:
             try:
                 self._connect()
@@ -119,6 +120,7 @@ class HybridBCIConnection:
                 time.sleep(3)
 
     def _connect(self):
+        """建立 TCP 连接，开启 NODELAY（降低实时性延迟）。"""
         self._buffer = b''
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5.0)
@@ -138,6 +140,7 @@ class HybridBCIConnection:
             self._sock = None
 
     def _recv_loop(self):
+        """持续收包，拼到缓冲区后交给 _drain 解帧。"""
         while self._running and self._connected:
             try:
                 chunk = self._sock.recv(8192)
@@ -151,7 +154,7 @@ class HybridBCIConnection:
             self._drain()
 
     def _drain(self):
-        """从缓冲区中尽可能多地解包完整帧并上抛。"""
+        """从缓冲区尽可能多地解包完整帧并上抛给业务层。"""
         while True:
             msg, self._buffer = IpcCodec.decode(self._buffer)
             if msg is None:
@@ -163,7 +166,7 @@ class HybridBCIConnection:
                     logger.exception('[HybridBCI] 消息处理出错: %s', e)
 
     def send(self, msg: dict) -> bool:
-        """发送一帧 JSON 消息，成功返回 True。"""
+        """发送一帧 JSON，成功返回 True。"""
         if not self._connected or not self._sock:
             return False
         with self._lock:
@@ -188,12 +191,13 @@ class HybridBCIBridge:
     def __init__(self, socketio, app=None, host='127.0.0.1', port=8000,
                  p300_grid_rows=3, p300_grid_cols=4):
         self.socketio = socketio
-        self.app = app  # Flask app，用于离线线程里获取 db 上下文
+        self.app = app                  # Flask app，用于后台线程里拿到 db 上下文写库
         self.p300_grid_rows = p300_grid_rows
         self.p300_grid_cols = p300_grid_cols
-        self.patient_id = None   # 平台下发的 user_id
+        self.patient_id = None          # 平台下发的 user_id（当前在线患者）
         self.layout_type = 0
 
+        # 把本桥接层作为消息回调，交给传输层
         self._conn = HybridBCIConnection(
             host=host, port=port,
             on_message=self._handle_message,
@@ -220,6 +224,7 @@ class HybridBCIBridge:
     # 平台 -> 后端 消息分发
     # ------------------------------------------------------------------
     def _handle_message(self, msg: dict):
+        """按 msg 字段把平台消息分到不同处理函数。"""
         msg_type = msg.get('msg', '')
         handler = {
             'ipc_user_info': self._on_user_info,
@@ -269,6 +274,7 @@ class HybridBCIBridge:
     # 平台 -> Unity 指令翻译
     # ------------------------------------------------------------------
     def _to_unity_command(self, algorithm, result):
+        """把平台算法结果翻译成 Unity 能懂的指令（cmd + param）。"""
         if algorithm in ('p300', 'p300_ssvep', 'p300_mi'):
             data = result.get('data')
             if data is not None:
@@ -290,6 +296,7 @@ class HybridBCIBridge:
         return None
 
     def _send_to_unity(self, command):
+        """通过 routes.unity.send_command_to_unity 把指令推给在线 Unity。"""
         from routes.unity import send_command_to_unity
         target = self.patient_id or '202505001'
         send_command_to_unity(target, command)
@@ -304,6 +311,7 @@ class HybridBCIBridge:
         return self._conn.send({'msg': 'ipc_event', 'event': event})
 
     def send_event(self, event_id, extra_data=None):
+        """向平台发送一个通用事件（第一个游戏训练结果导出用）。"""
         data = {'msg': 'ipc_event', 'event': event_id}
         if extra_data:
             data.update(extra_data)
@@ -324,7 +332,7 @@ class HybridBCIBridge:
             data.update(extra_data)
         ok = self._conn.send(data)
         if ok:
-            self._save_experiment(data)
+            self._save_experiment(data)   # 平台存一份后，后端再导出一份到 MySQL
         return ok
 
     # ------------------------------------------------------------------
@@ -335,7 +343,7 @@ class HybridBCIBridge:
         if self.app is None:
             return
         try:
-            with self.app.app_context():
+            with self.app.app_context():   # 后台线程必须有 app 上下文才能用 db
                 from extensions import db
                 from models.training import ExperimentRecord
                 rec = ExperimentRecord(

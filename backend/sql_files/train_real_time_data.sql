@@ -1,3 +1,7 @@
+-- ⚠️ 旧版碎片文件（仅供对照/备份），【请勿与 BCI.sql 混跑】。
+--    本文件与 BCI.sql 里的 train_real_time_data 重复。认准 BCI.sql 当唯一真源；
+--    该表也由后端 ORM 自动建（models/training.py 的 TrainingData）。
+
 CREATE TABLE IF NOT EXISTS train_real_time_data (
     data_id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '实时数据自增ID',
     patient_id VARCHAR(20) NOT NULL COMMENT '患者ID',

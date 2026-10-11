@@ -1,3 +1,6 @@
+-- ⚠️ 旧版碎片文件（仅供对照/备份），【请勿与 BCI.sql 混跑】。
+--    本文件是早期医生表，缺少 role 列与 email 列，认准 BCI.sql 当唯一真源。
+
 CREATE TABLE IF NOT EXISTS doctor_info (
     doctor_id VARCHAR(20) PRIMARY KEY,  -- 医生ID（主键）
     doctor_name VARCHAR(50) NOT NULL,   -- 医生姓名

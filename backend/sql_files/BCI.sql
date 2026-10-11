@@ -1,3 +1,16 @@
+-- =====================================================================
+-- 主文件（最全）：脑卒中康复游戏数据库 完整建表 + 示例数据 + 索引
+-- ---------------------------------------------------------------------
+-- ⭐ 这是唯一真源(Single Source of Truth)。
+--   手工建库时：先跑 数据库初始化.sql，再跑本文件；
+--   email 列已随本文件建好（找回密码功能用）。
+--   平台实验反馈表另见 experiment_record.sql（再补跑一份即可）。
+-- 说明：
+--   · 真实运行的库由后端 ORM（db.create_all）自动创建，本文件主要用于
+--     “看表结构 / 本地手动建一套库 / 备份参考”。
+--   · 改表结构请优先改 backend/models/*.py，再同步到这里。
+-- =====================================================================
+
 -- 创建数据库
 CREATE DATABASE IF NOT EXISTS stroke_rehab_game
 DEFAULT CHARACTER SET utf8mb4
@@ -6,6 +19,7 @@ COLLATE utf8mb4_unicode_ci;
 USE stroke_rehab_game;
 
 -- ======================= 1. 患者表（包含所有字段） =======================
+-- 患者基础信息 + 登录账号（patient_id 同时是登录后的 JWT 身份）
 CREATE TABLE IF NOT EXISTS patient_info (
     patient_id VARCHAR(20) PRIMARY KEY COMMENT '患者ID',
     patient_name VARCHAR(50) NOT NULL COMMENT '患者姓名',
@@ -16,6 +30,7 @@ CREATE TABLE IF NOT EXISTS patient_info (
     admission_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '康复开始时间',
     doctor_name VARCHAR(50) COMMENT '主治医生姓名',
     phone VARCHAR(20) COMMENT '家属电话',
+    email VARCHAR(100) DEFAULT NULL COMMENT '邮箱（找回密码用）',
     remark TEXT COMMENT '备注',
     pwd VARCHAR(50) COMMENT '登录密码',
     username VARCHAR(50) NOT NULL UNIQUE COMMENT '登录账号',
@@ -24,6 +39,7 @@ CREATE TABLE IF NOT EXISTS patient_info (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='患者信息表';
 
 -- ======================= 2. 游戏关卡配置表 =======================
+-- 每个游戏(星光舞台/星际翼航/肘伸展采水晶)的关卡：目标角度/难度/时长
 CREATE TABLE IF NOT EXISTS game_level_config (
     level_id INT PRIMARY KEY AUTO_INCREMENT COMMENT '关卡ID',
     game_name VARCHAR(50) NOT NULL COMMENT '游戏名称',
@@ -36,7 +52,7 @@ CREATE TABLE IF NOT EXISTS game_level_config (
     game_remark VARCHAR(200) COMMENT '规则说明'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 插入关卡数据
+-- 插入关卡数据（示例）
 INSERT IGNORE INTO game_level_config (game_name, train_part, level_name, target_angle, angle_tolerance, train_duration, difficulty, game_remark) VALUES
 ('星际翼航', '肩外展+内收', '航道1（入门）', 60.00, 8.00, 300, '简单', '抬胳膊够60°'),
 ('星际翼航', '肩外展+内收', '航道2（进阶）', 90.00, 5.00, 360, '中等', '抬胳膊够90°'),
@@ -46,6 +62,7 @@ INSERT IGNORE INTO game_level_config (game_name, train_part, level_name, target_
 ('星光舞台', '前臂旋前+旋后', '高级节奏', 90.00, 5.00, 240, '困难', '节拍快');
 
 -- ======================= 3. 训练实时数据表 =======================
+-- Unity 每帧上报一帧(角度/难度/反馈)就插一行；量增长快，注意归档
 CREATE TABLE IF NOT EXISTS train_real_time_data (
     data_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     patient_id VARCHAR(20) NOT NULL,
@@ -89,6 +106,7 @@ CREATE TABLE IF NOT EXISTS doctor_info (
     gender CHAR(2),
     department VARCHAR(50),
     phone VARCHAR(20),
+    email VARCHAR(100) DEFAULT NULL COMMENT '邮箱（找回密码用）',
     username VARCHAR(50) NOT NULL,
     pwd VARCHAR(50) NOT NULL,
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -143,7 +161,7 @@ INSERT IGNORE INTO escort_info (escort_id, escort_name, gender, relation, patien
 ('ESC2025001', '李母', '女', '母亲', '202505002', '13800138002', 'escort_lisi', 'Esc123456!'),
 ('ESC2025002', '张父', '男', '父亲', '202505001', '13700137000', 'escort_zhang', 'Esc123456!');
 
--- 索引
+-- 索引（加速按患者/关卡/时间查询）
 CREATE INDEX idx_patient_id ON train_real_time_data(patient_id);
 CREATE INDEX idx_level_id ON train_real_time_data(level_id);
 CREATE INDEX idx_train_time ON train_real_time_data(train_time);

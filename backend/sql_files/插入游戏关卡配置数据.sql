@@ -1,3 +1,7 @@
+-- ⚠️ 旧版碎片文件（仅供对照/备份），【请勿与 BCI.sql 混跑】。
+--    这是往 game_level_config 插示例数据的脚本，内容与 BCI.sql 里的一致。
+--    建库时认准 BCI.sql（已含这些 INSERT）；本文件仅作数据备份参考。
+
 INSERT INTO game_level_config (game_name, train_part, level_name, target_angle, angle_tolerance, train_duration, difficulty, game_remark)
 VALUES
 ('星际翼航', '肩外展+内收', '航道1（入门）', 60.00, 8.00, 300, '简单', '抬胳膊够60°，捡80%晶体解锁，干扰磁场少'),

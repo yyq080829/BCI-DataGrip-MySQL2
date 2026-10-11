@@ -1,17 +1,21 @@
 """
-后台实时监控页面
+后台实时监控页面（蓝图 monitor_bp，页面 /monitor）
 
-用途：实时显示 Unity 上报的「大臂(肩外展)抬起角度」。
-数据链路：Unity --training_frame--> train_real_time_data(数据库) --广播--> 本页面(/monitor)
+用途：实时显示 Unity 第二个游戏（大臂康复）上报的「肩外展(大臂抬起)角度」。
+数据链路：Unity --training_frame--> train_real_time_data(数据库) --广播--> 本页(/monitor)
 
-注意：这条链路与华南脑控 HybridBCI 平台、脑电数据完全无关，
+重要：这条链路与华南脑控 HybridBCI 平台、脑电数据完全无关，
       大臂康复数据直接 Unity <-> 数据库对接，适合在后台大屏/医生端实时观看。
+
+实现：一个自包含 HTML 页（无外部 CDN 依赖），用后端自带的
+      /socket.io/socket.io.js 连 WebSocket，订阅 /monitor 命名空间的 arm_angle_update 事件。
 """
 
 from flask import Blueprint, Response
 
 monitor_bp = Blueprint('monitor', __name__)
 
+# 页面 HTML 直接内联，部署最简单（无需额外模板引擎）。
 HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -69,6 +73,7 @@ HTML = """<!DOCTYPE html>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
+  // 连到后端 /monitor 命名空间（与 Unity 的 /unity 分开，互不干扰）
   const socket = io('/monitor');
   const status = document.getElementById('status');
   socket.on('connect', () => { status.style.background = '#3fb950'; });
@@ -78,6 +83,7 @@ HTML = """<!DOCTYPE html>
   const canvas = document.getElementById('chart');
   const ctx = canvas.getContext('2d');
 
+  // 收到一帧角度更新就刷新页面
   socket.on('arm_angle_update', (d) => {
     document.getElementById('angle').textContent =
       d.shoulder_abduction != null ? d.shoulder_abduction.toFixed(1) : '--';
@@ -103,6 +109,7 @@ HTML = """<!DOCTYPE html>
     log.prepend(line);
   });
 
+  // 简易折线图：蓝线=实时角度，橙虚线=目标角度
   function drawChart(target) {
     const w = canvas.width = canvas.clientWidth;
     const h = canvas.height = canvas.clientHeight;
@@ -131,5 +138,5 @@ HTML = """<!DOCTYPE html>
 
 @monitor_bp.route('/monitor')
 def monitor_page():
-    """后台实时监控页：实时显示大臂抬起角度"""
+    """后台实时监控页：实时显示大臂抬起角度。"""
     return Response(HTML, mimetype='text/html')

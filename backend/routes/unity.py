@@ -1,19 +1,20 @@
 """
-Unity对接接口
-- POST /api/unity/send-eeg       : Unity上传EEG数据（备用）
-- GET  /api/unity/game-command   : Unity轮询获取游戏控制指令（降级方案）
-- WebSocket /unity               : Unity实时通信（主要方式）
+Unity 对接接口（蓝图 unity_bp，主要用 WebSocket 命名空间 /unity）
 
-P300 新增事件:
-- p300_flash : Unity上报闪烁事件（绿色频闪/红色闪烁）
-- p300_start : Unity通知P300范式开始
-- p300_stop  : Unity通知P300范式结束
+这是后端与 Unity 游戏通信的核心模块，承担两个游戏的数据接入：
 
-实验记录上报:
-- p300_stop 时自动向平台上报实验记录数据
+  【第一个游戏 · 脑机拼写游戏】经华南脑控 HybridBCI 平台
+    · Unity 通过 p300_start / p300_flash / p300_stop 把刺激事件上报后端
+    · 后端转发给平台（HybridBCIBridge.send_p300_marker / send_experiment_data）
+    · 平台算法结果再由桥接层翻译为游戏指令推回 Unity（见 services/hybridbci_client.py）
 
-大臂康复实时数据（直连，不经平台/脑电）:
-- training_frame : Unity 每帧上报肩外展等角度 -> 直接写 train_real_time_data -> 实时广播到 /monitor 后台
+  【第二个游戏 · 大臂康复】Unity 直连数据库，不经过脑电平台
+    · Unity 每帧 training_frame 上报肩外展等角度 -> 直接写 train_real_time_data
+    · 实时广播到 /monitor 命名空间，供后台监控页实时显示
+
+此外 training_result 是两个游戏共用的“结束汇总”事件，用 game_type 区分：
+  game_type=1 平台游戏：MySQL 存一份 + 平台再存一份（导出）
+  game_type=2 直连游戏：只存 MySQL
 """
 
 from flask import Blueprint, request, jsonify, current_app
@@ -26,23 +27,23 @@ logger = logging.getLogger(__name__)
 
 unity_bp = Blueprint('unity', __name__)
 
-# 存储患者ID与WebSocket会话ID的映射
+# 在线患者映射：patient_id -> WebSocket 会话ID(sid)，用于精准推送游戏指令
 patient_sid_map = {}
 
-# P300 范式运行状态
+# P300 范式运行状态（一次训练过程中的累计计数）
 p300_running = False
-p300_flash_count = 0
-p300_start_time = 0
-p300_target_count = 0
-p300_nontarget_count = 0
+p300_flash_count = 0          # 总闪烁次数
+p300_start_time = 0           # 开始时间戳（用于算时长）
+p300_target_count = 0         # 目标刺激次数（红色闪烁）
+p300_nontarget_count = 0      # 非目标刺激次数（绿色频闪）
 
 
 # ------------------------------------------------------------------
-# HTTP 接口（降级备用）
+# HTTP 接口（降级备用，正常走下面的 WebSocket）
 # ------------------------------------------------------------------
 @unity_bp.route('/send-eeg', methods=['POST'])
 def receive_eeg_from_unity():
-    """接收Unity端传来的脑电数据（备用）"""
+    """备用：接收 Unity 传来的脑电数据（当前未做落库，仅回显）。"""
     try:
         data = request.get_json()
         return jsonify({'code': 200, 'message': '数据已接收', 'data': data}), 200
@@ -52,24 +53,23 @@ def receive_eeg_from_unity():
 
 @unity_bp.route('/game-command', methods=['GET'])
 def get_game_command():
-    """Unity轮询获取游戏控制指令（降级方案）"""
+    """备用：Unity 轮询获取游戏控制指令（主方案是 WebSocket 主动推送）。"""
     return jsonify({'code': 200, 'data': {'cmd': 'idle', 'param': ''}}), 200
 
 
 # ------------------------------------------------------------------
-# WebSocket 事件处理
+# WebSocket 事件处理（命名空间 /unity）
 # ------------------------------------------------------------------
 @socketio.on('connect', namespace='/unity')
 def on_unity_connect():
-    """Unity客户端连接"""
+    """Unity 客户端连上 WebSocket。"""
     logger.info('[Unity] 客户端已连接')
 
 
 @socketio.on('disconnect', namespace='/unity')
 def on_unity_disconnect():
-    """Unity客户端断开"""
+    """Unity 断开：从在线映射里清掉它的 sid。"""
     logger.info('[Unity] 客户端已断开')
-    # 清理映射
     for pid, sid in list(patient_sid_map.items()):
         if sid == request.sid:
             del patient_sid_map[pid]
@@ -78,11 +78,7 @@ def on_unity_disconnect():
 
 @socketio.on('register_patient', namespace='/unity')
 def on_register_patient(data):
-    """
-    Unity注册患者ID
-
-    请求格式: {"patient_id": "202505001"}
-    """
+    """Unity 上线时先报 patient_id，后端记下 sid 以便后续精准推送指令。"""
     patient_id = data.get('patient_id')
     if patient_id:
         patient_sid_map[patient_id] = request.sid
@@ -93,23 +89,14 @@ def on_register_patient(data):
 
 
 # ------------------------------------------------------------------
-# P300 闪烁事件
+# P300 拼写游戏（第一个游戏，经平台）
 # ------------------------------------------------------------------
 @socketio.on('p300_flash', namespace='/unity')
 def on_p300_flash(data):
-    """
-    Unity上报P300闪烁事件
+    """Unity 上报一次闪烁刺激。
 
-    请求格式:
-    {
-        "is_target": true,     // true=红色闪烁(目标), false=绿色频闪(非目标)
-        "row": 2,              // 行号(1-based)
-        "col": 3               // 列号(1-based)
-    }
-
-    后端终端输出:
-    - 绿色频闪 → 0
-    - 红色闪烁 → 1 (row,col)
+    字段：is_target(true=红色闪烁/目标, false=绿色频闪/非目标), row, col。
+    后端把目标/非目标翻译成平台事件编号（1/0）转发给 HybridBCI 平台。
     """
     global p300_flash_count, p300_target_count, p300_nontarget_count
 
@@ -119,6 +106,7 @@ def on_p300_flash(data):
 
     p300_flash_count += 1
 
+    # 转发打标事件给平台（0=非目标, 1=目标）
     bci_client = current_app.config.get('BCI_CLIENT')
     if bci_client and hasattr(bci_client, 'send_p300_marker'):
         bci_client.send_p300_marker(is_target=is_target, row=row, col=col)
@@ -133,16 +121,7 @@ def on_p300_flash(data):
 
 @socketio.on('p300_start', namespace='/unity')
 def on_p300_start(data):
-    """
-    Unity通知P300范式开始
-
-    请求格式:
-    {
-        "patient_id": "202505001",
-        "grid_rows": 3,
-        "grid_cols": 4
-    }
-    """
+    """Unity 通知 P300 范式开始：重置计数、记录开始时间、注册患者。"""
     global p300_running, p300_flash_count, p300_start_time
     global p300_target_count, p300_nontarget_count
 
@@ -156,7 +135,6 @@ def on_p300_start(data):
     p300_nontarget_count = 0
     p300_start_time = time.time()
 
-    # 注册患者
     if patient_id:
         patient_sid_map[patient_id] = request.sid
 
@@ -173,18 +151,7 @@ def on_p300_start(data):
 
 @socketio.on('p300_stop', namespace='/unity')
 def on_p300_stop(data):
-    """
-    Unity通知P300范式结束
-
-    请求格式:
-    {
-        "patient_id": "202505001",
-        "score": 85,
-        "accuracy": 0.75
-    }
-
-    同时向平台上报实验记录数据
-    """
+    """Unity 通知 P300 范式结束：把实验结果上报平台（平台侧存一份）。"""
     global p300_running
 
     patient_id = data.get('patient_id')
@@ -205,7 +172,7 @@ def on_p300_stop(data):
     print(f"  时长: {duration}秒")
     print("=" * 50)
 
-    # ★ 关键：向平台上报实验记录 ★
+    # ★ 关键：向平台上报实验记录（平台侧落库；后端这边由桥接层再导出一份到 experiment_record）★
     bci_client = current_app.config.get('BCI_CLIENT')
     if bci_client and hasattr(bci_client, 'send_experiment_data'):
         bci_client.send_experiment_data(
@@ -220,7 +187,7 @@ def on_p300_stop(data):
                 'nontarget_count': p300_nontarget_count
             }
         )
-        logger.info(f'[P300] 已向平台上报实验记录')
+        logger.info('[P300] 已向平台上报实验记录')
     else:
         logger.warning('[P300] BCI客户端未启动，无法上报实验记录')
 
@@ -228,62 +195,65 @@ def on_p300_stop(data):
 
 
 # ------------------------------------------------------------------
-# 训练结果
+# 训练结果（两个游戏共用）
 # ------------------------------------------------------------------
 @socketio.on('training_result', namespace='/unity')
 def on_training_result(data):
-    """
-    Unity上传训练结果
+    """Unity 上传训练结果（结束汇总），用 game_type 区分两个游戏。
 
-    请求格式:
-    {
-        "patient_id": "202505001",
-        "level_id": 1,
-        "score": 85,
-        "duration": 300
-    }
+    game_type=1 第一个游戏(平台)：MySQL(train_real_time_data) 存一份 + 平台再存一份
+    game_type=2 第二个游戏(直连)：只存 MySQL，不碰平台
     """
     patient_id = data.get('patient_id')
-    logger.info(f'[Unity] 收到训练结果: patient={patient_id}, data={data}')
+    level_id = data.get('level_id')
+    score = data.get('score', 0)
+    duration = data.get('duration', 0)
+    game_type = data.get('game_type', 1)   # 默认按第一个游戏(平台)处理
 
-    # 向平台发送事件
-    bci_client = current_app.config.get('BCI_CLIENT')
-    if bci_client and hasattr(bci_client, 'send_event'):
-        event_id = 100
-        bci_client.send_event(event_id, extra_data={
-            'patient_id': patient_id,
-            'score': data.get('score'),
-            'duration': data.get('duration')
-        })
-        logger.info(f'[Unity] 已向平台发送事件 {event_id}')
+    logger.info(f'[Unity] 收到训练结果: patient={patient_id}, game_type={game_type}, data={data}')
+
+    # —— ① 两个游戏都把“汇总结果”写进 MySQL，保证数据落库 ——
+    from models.training import TrainingData
+    with current_app.app_context():
+        try:
+            summary = TrainingData(
+                patient_id=patient_id,
+                level_id=level_id,
+                game_score=score,
+                device_type='平台脑机游戏' if game_type == 1 else 'Unity直连游戏',
+            )
+            db.session.add(summary)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'[Unity] 训练结果写库失败: {e}')
+
+    # —— ② 仅第一个游戏：把结果上报/导出到 HybridBCI 平台 ——
+    if game_type == 1:
+        bci_client = current_app.config.get('BCI_CLIENT')
+        if bci_client and hasattr(bci_client, 'send_event'):
+            bci_client.send_event(100, extra_data={
+                'patient_id': patient_id,
+                'score': score,
+                'duration': duration,
+            })
+            logger.info('[Unity] 已把第一个游戏结果上报 HybridBCI 平台（平台侧已存储，MySQL 副本已保存）')
+        else:
+            logger.warning('[Unity] BCI客户端未启动，无法上报平台；但 MySQL 副本已保存')
     else:
-        logger.warning('[Unity] BCI客户端未启动或不支持send_event')
+        logger.info('[Unity] 第二个游戏（直连），数据已直接存入 MySQL，不经过平台')
 
     emit('training_result_ack', {'status': 'ok', 'message': '数据已接收'})
 
 
 # ------------------------------------------------------------------
-# 实时训练帧（接通 Unity 实时角度 / 难度 / 反馈 -> 数据库）
+# 实时训练帧（第二个游戏：Unity 直连数据库，实时角度/难度/反馈）
 # ------------------------------------------------------------------
 @socketio.on('training_frame', namespace='/unity')
 def on_training_frame(data):
-    """
-    Unity 实时上报单帧训练数据
+    """Unity 实时上报单帧训练数据 -> 直接写 train_real_time_data -> 广播到 /monitor。
 
-    请求格式:
-    {
-        "patient_id": "202505001",
-        "level_id": 1,                 // 关卡(决定目标角度/难度)
-        "shoulder_abduction": 58.5,    // 肩外展角度
-        "elbow_extension": 0.0,        // 肘伸展角度
-        "forearm_rotation": 90.0,      // 前臂旋转角度
-        "action_score": 8,             // 单动作得分
-        "is_qualified": true,          // 是否达标
-        "compensation": "无",          // 代偿动作
-        "compensation_score": 100,     // 代偿评分
-        "game_score": 80,              // 当前游戏得分
-        "device_type": "AR手机"        // 采集设备
-    }
+    这是【大臂康复】的直连路径，完全不经过脑电平台。
     """
     from flask import current_app
     from extensions import db, socketio
@@ -297,6 +267,7 @@ def on_training_frame(data):
 
     with current_app.app_context():
         try:
+            # 落库：一帧 = 一行 train_real_time_data
             row = TrainingData(
                 patient_id=patient_id,
                 level_id=level_id,
@@ -313,7 +284,7 @@ def on_training_frame(data):
             db.session.add(row)
             db.session.commit()
 
-            # 查询关卡目标角度，便于后台对比显示
+            # 查该关卡目标角度，便于后台对比显示“患者角度 vs 目标角度”
             level = GameLevel.query.get(level_id)
             target_angle = float(level.target_angle) if level and level.target_angle is not None else None
 
@@ -337,10 +308,10 @@ def on_training_frame(data):
 
 
 # ------------------------------------------------------------------
-# 对外接口函数（供其他模块调用）
+# 对外接口函数（供 services/hybridbci_client.py 调用，把平台指令推给 Unity）
 # ------------------------------------------------------------------
 def send_command_to_unity(patient_id: str, command: dict) -> bool:
-    """向指定患者的Unity客户端发送游戏指令"""
+    """把平台翻译好的游戏指令推送给指定患者的 Unity 客户端。"""
     sid = patient_sid_map.get(patient_id)
     if sid:
         emit('game_command', command, room=sid, namespace='/unity')
@@ -352,5 +323,5 @@ def send_command_to_unity(patient_id: str, command: dict) -> bool:
 
 
 def get_online_patients():
-    """返回当前在线的患者ID列表"""
+    """返回当前在线的患者ID列表。"""
     return list(patient_sid_map.keys())

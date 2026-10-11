@@ -1,3 +1,8 @@
+-- ⚠️ 旧版碎片文件（仅供对照/备份），【请勿与 BCI.sql 混跑】。
+--    本文件是早期患者表，缺少 username/pwd/role/doctor_id/email 等登录字段，
+--    若先跑它再跑 BCI.sql（IF NOT EXISTS 不会覆盖），库里就是缺字段的旧表。
+--    认准 BCI.sql 作为唯一真源；真实表由后端 ORM 自动建。
+
 CREATE TABLE IF NOT EXISTS patient_info (
     patient_id VARCHAR(20) PRIMARY KEY COMMENT '患者唯一标识（住院号/身份证后8位）',
     patient_name VARCHAR(50) NOT NULL COMMENT '患者姓名',

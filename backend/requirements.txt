@@ -1,14 +1,23 @@
-Flask==3.0.0
-flask-cors==4.0.0
-flask-sqlalchemy==3.1.1
-flask-jwt-extended==4.6.0
-flask-socketio==5.3.6
-pymysql==1.1.0
-numpy==1.26.2
-scipy==1.11.4
-opencv-python==4.8.1.78
-scikit-learn==1.3.2
+# 脑卒中上肢康复系统 · 后端 Python 依赖清单
+# 安装方式：在 backend 目录执行  pip install -r requirements.txt
+# 建议在虚拟环境(venv)里安装，避免污染全局 Python
 
-eventlet==0.33.3
+# ---- Web 框架 ----
+Flask==3.0.0                 # 核心 Web 框架，提供路由/蓝图/请求处理
+flask-cors==4.0.0            # 处理跨域(CORS)，允许前端不同端口访问本后端
+flask-sqlalchemy==3.1.1      # SQLAlchemy 的 Flask 封装，用类定义数据库表
+flask-jwt-extended==4.6.0    # 登录鉴权：签发/校验 JWT 令牌
+flask-socketio==5.3.6        # WebSocket 支持，Unity 实时通信靠它
 
-simple-websocket==0.10.0
+# ---- 数据库驱动 ----
+pymysql==1.1.0               # 纯 Python 的 MySQL 驱动（连接串里 mysql+pymysql 用到）
+
+# ---- 科学计算（脑电/信号分析可能用到）----
+numpy==1.26.2                # 数值计算基础库
+scipy==1.11.4                # 科学计算（滤波/FFT 等）
+opencv-python==4.8.1.78      # 图像/视频处理（视觉相关游戏可能用）
+scikit-learn==1.3.2          # 机器学习（分类/评估指标）
+
+# ---- 并发与底层 ----
+eventlet==0.33.3             # 高并发网络引擎，flask-socketio 依赖它跑 WebSocket
+simple-websocket==0.10.0     # flask-socketio 的低层 WebSocket 实现依赖

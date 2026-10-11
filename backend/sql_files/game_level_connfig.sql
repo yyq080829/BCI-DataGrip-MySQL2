@@ -1,3 +1,7 @@
+-- ⚠️ 旧版碎片文件（仅供对照/备份），【请勿与 BCI.sql 混跑】。
+--    文件名拼写有误（connfig 应为 config），且内容与 BCI.sql 里的
+--    game_level_config 重复。认准 BCI.sql 当唯一真源。
+
 CREATE TABLE IF NOT EXISTS game_level_config (
     level_id INT PRIMARY KEY AUTO_INCREMENT COMMENT '关卡自增ID',
     game_name VARCHAR(50) NOT NULL COMMENT '康复游戏名称',

@@ -1,3 +1,7 @@
+-- ⚠️ 旧版碎片文件（仅供对照/备份），【请勿与 BCI.sql 混跑】。
+--    陪同人员表当前后端未建模（models 里已删除 Escort），仅保留此参考。
+--    真实库如需陪同人员，请基于 BCI.sql 的 escort_info（含 role 列）建。
+
 CREATE TABLE IF NOT EXISTS escort_info (
     escort_id        VARCHAR(20) PRIMARY KEY COMMENT '陪同人员ID（主键）',
     escort_name      VARCHAR(50) NOT NULL COMMENT '陪同人员姓名',

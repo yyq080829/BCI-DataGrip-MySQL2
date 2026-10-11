@@ -1,8 +1,16 @@
 """
-训练数据接口
-POST /api/training/save    - 存储Unity游戏结束后的得分、时长
-GET  /api/training/history - 查询训练历史
-GET  /api/training/stats   - 训练数据统计
+训练数据接口（蓝图 training_bp，前缀 /api/training）
+
+这是给【游戏结束后】或【非实时场景】用的 HTTP 接口；真正的实时角度流走
+routes/unity.py 的 WebSocket training_frame 事件（每帧一条，高频）。
+
+提供：
+  · POST /api/training/save    保存一次训练结果（单条，兼容旧 Unity 调用）
+  · GET  /api/training/history 分页查询某患者训练历史
+  · GET  /api/training/stats   统计：总次数、平均分、达标率、各游戏细分
+
+注意：save 和 unity 的 training_frame 都会写 train_real_time_data，
+所以 /stats 的总次数把两种来源都算进去了。
 """
 
 from flask import Blueprint, request, jsonify
@@ -16,7 +24,7 @@ training_bp = Blueprint('training', __name__, url_prefix='/api/training')
 
 @training_bp.route('/save', methods=['POST'])
 def save_training_result():
-    """存储Unity游戏结束后的结果"""
+    """保存一次训练结果（Unity 游戏结束时调用）。"""
     try:
         data = request.get_json()
         if not data:
@@ -27,6 +35,7 @@ def save_training_result():
         if not patient_id or not level_id:
             return jsonify({'code': 400, 'message': '缺少patient_id或level_id'}), 400
 
+        # 把前端传来的字段直接建一行训练记录
         training = TrainingData(
             patient_id=patient_id,
             level_id=level_id,
@@ -50,7 +59,7 @@ def save_training_result():
 
 @training_bp.route('/history', methods=['GET'])
 def get_training_history():
-    """查询训练历史"""
+    """分页查询训练历史（?patient_id=xxx&page=1&per_page=20）。"""
     try:
         patient_id = request.args.get('patient_id')
         if not patient_id:
@@ -59,11 +68,10 @@ def get_training_history():
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 20, type=int)
 
-        pagination = TrainingData.query.filter_by(
-            patient_id=patient_id
-        ).order_by(TrainingData.train_time.desc()).paginate(
-            page=page, per_page=per_page, error_out=False
-        )
+        # paginate 是 Flask-SQLAlchemy 自带的分页工具
+        pagination = TrainingData.query.filter_by(patient_id=patient_id)\
+            .order_by(TrainingData.train_time.desc())\
+            .paginate(page=page, per_page=per_page, error_out=False)
 
         return jsonify({
             'code': 200,
@@ -81,33 +89,27 @@ def get_training_history():
 
 @training_bp.route('/stats', methods=['GET'])
 def get_training_stats():
-    """训练数据统计"""
+    """训练数据统计：总次数、平均分、达标率，以及按游戏细分（计数/均分/最佳）。"""
     try:
         patient_id = request.args.get('patient_id')
         if not patient_id:
             return jsonify({'code': 400, 'message': '缺少patient_id'}), 400
 
         total = TrainingData.query.filter_by(patient_id=patient_id).count()
-        avg_score = db.session.query(
-            func.avg(TrainingData.game_score)
-        ).filter_by(patient_id=patient_id).scalar()
+        avg_score = db.session.query(func.avg(TrainingData.game_score))\
+            .filter_by(patient_id=patient_id).scalar()
 
-        qualified = TrainingData.query.filter_by(
-            patient_id=patient_id,
-            is_qualified=True
-        ).count()
+        qualified = TrainingData.query.filter_by(patient_id=patient_id, is_qualified=True).count()
         qualified_rate = (qualified / total * 100) if total > 0 else 0
 
+        # 按游戏名分组聚合：count / avg / max
         game_stats = db.session.query(
             GameLevel.game_name,
             func.count(TrainingData.data_id),
             func.avg(TrainingData.game_score),
             func.max(TrainingData.game_score)
-        ).join(
-            TrainingData
-        ).filter(
-            TrainingData.patient_id == patient_id
-        ).group_by(GameLevel.game_name).all()
+        ).join(TrainingData).filter(TrainingData.patient_id == patient_id)\
+            .group_by(GameLevel.game_name).all()
 
         return jsonify({
             'code': 200,

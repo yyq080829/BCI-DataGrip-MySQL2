@@ -1,3 +1,7 @@
+-- ⚠️ 旧版碎片文件（仅供对照/备份），【请勿与 BCI.sql 混跑】。
+--    文件名拼写有误（assesment 应为 assessment），且内容与 BCI.sql 里的
+--    stage_assessment 重复。认准 BCI.sql 当唯一真源。
+
 CREATE TABLE IF NOT EXISTS stage_assessment (
     assess_id INT PRIMARY KEY AUTO_INCREMENT COMMENT '评估自增ID',
     patient_id VARCHAR(20) NOT NULL COMMENT '患者ID',

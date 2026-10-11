@@ -40,6 +40,7 @@
 | ⭐ `数据库初始化.sql` | 建库 + `USE` | 入口，先跑这个 |
 | ⭐ `BCI.sql` | **【主文件·最全】** 完整建表 + 示例数据 + 索引 | 优先看它，包含 patient/doctor/escort/关卡/实时训练/阶段评估 |
 | ⭐ `experiment_record.sql` | **【新增】平台实验反馈记录表** | 配合后端连接华南脑控平台 |
+| `add_email_column.sql` | **已有库补 email 列**（找回密码用） | 老库先跑它再启动后端，否则报 Unknown column 'email' |
 | `bci_data.sql` | 脑电数据表（无外键、无 ORM 模型） | 仅在 SQL 里有，需要手动建 |
 | `questionnaire.sql` | 问卷**模板**主表 + 问题表，并插入 10 道题 | 问卷题目来自这里 |
 | `插入游戏关卡配置数据.sql` | 往关卡表插示例数据 | |
@@ -100,9 +101,10 @@
 | username | VARCHAR(50) UNIQUE | 登录账号 |
 | doctor_id | VARCHAR(20) | 主治医生 ID（仅存储，**不是外键**） |
 | role | VARCHAR(20) | 角色，默认 `patient` |
+| email | VARCHAR(100) | 邮箱（找回密码用，新增） |
 
 ### 4.2 doctor_info（医生表）/ escort_info（陪同人员表）
-结构类似患者：各自有 `*_id`(主键)、`*_name`、`gender`、`phone`、`username`(唯一)、`pwd`、`create_time`、`role`。
+结构类似患者：各自有 `*_id`(主键)、`*_name`、`gender`、`phone`、`username`(唯一)、`pwd`、`create_time`、`role`，并新增 `email`（找回密码用）。
 陪同表额外有 `relation`（与患者关系）、`patient_id`（关联患者）。
 
 ### 4.3 game_level_config（游戏关卡配置表）
@@ -235,3 +237,13 @@ python app.py
 - 🗑️ **实时表会很大**：`train_real_time_data` 每帧一行，量增长快，建议定期备份/归档。
 - 🔗 **外键都是 CASCADE**：删除患者会连带删除其训练/评估/实验记录，操作前确认。
 - 🕒 所有时间字段默认取当前时间戳。
+
+---
+
+## 8. 与前端 / Unity 对接的 3 件事（后端职责速查）
+
+1. **问卷系统（前端 ↔ 数据库）**：医生/患者登录用 `/api/auth/*`；问卷题目 `/api/questionnaire/questions`、提交 `/api/questionnaire/submit`（落到 `questionnaire_record`）。`app.py` 同时托管 `frontend/` 静态文件，访问 `/` 直接打开问卷页 `康游智创(5).html`。
+2. **第一个游戏（Unity ↔ HybridBCI 平台 ↔ MySQL）**：脑机游戏经 `HybridBCIBridge` 与平台 TCP 通信；游戏结束后平台存一份，后端再"导出"一份到 `experiment_record` + `train_real_time_data`。
+3. **第二个游戏（Unity ↔ MySQL 直连）**：大臂康复数据由 Unity 每帧 `training_frame` 直接写 `train_real_time_data`，并经 `/monitor` 实时显示，**不经过脑电平台**。
+
+> ⚠️ 新增 `email` 字段用于找回密码：新建库会由 ORM 自动建列；**已有库请先执行 `sql_files/add_email_column.sql`**（ALTER）否则注册/找回密码会报 `Unknown column 'email'`。
