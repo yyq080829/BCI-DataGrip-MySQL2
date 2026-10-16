@@ -25,7 +25,7 @@
 |------|-----|
 | 数据库名 | `stroke_rehab_game` |
 | 字符集 | `utf8mb4` |
-| 排序规则 | `utf8mb4_unicode_ci` |
+| 排序规则 | `utf8mb4_general_ci`（必须与 `config.py` 一致，否则外键报 3780） |
 | 引擎 | `InnoDB` |
 | 连接方式 | MySQL（`backend/config.py` 里配置账号密码） |
 
@@ -33,28 +33,17 @@
 
 ## 2. 这些 SQL 文件分别是干什么的
 
-> 建议：**手工建库只按顺序跑带 ⭐ 的主文件**，其余是碎片/备份，看一眼即可，不要重复执行。
+> 建议：**手工建库只跑 `BCI.sql` 一个主文件即可**（它已含 `CREATE DATABASE + USE`、所有业务表、示例数据与索引）。其余文件是可选的扩展/迁移，按需单独跑，不要重复执行。
 
 | 文件名 | 作用 | 备注 |
 |--------|------|------|
-| ⭐ `数据库初始化.sql` | 建库 + `USE` | 入口，先跑这个 |
-| ⭐ `BCI.sql` | **【主文件·最全】** 完整建表 + 示例数据 + 索引 | 优先看它，包含 patient/doctor/escort/关卡/实时训练/阶段评估 |
-| ⭐ `experiment_record.sql` | **【新增】平台实验反馈记录表** | 配合后端连接华南脑控平台 |
-| `add_email_column.sql` | **已有库补 email 列**（找回密码用） | 老库先跑它再启动后端，否则报 Unknown column 'email' |
-| `bci_data.sql` | 脑电数据表（无外键、无 ORM 模型） | 仅在 SQL 里有，需要手动建 |
-| `questionnaire.sql` | 问卷**模板**主表 + 问题表，并插入 10 道题 | 问卷题目来自这里 |
-| `插入游戏关卡配置数据.sql` | 往关卡表插示例数据 | |
-| `阶段评估数据.sql` | 往阶段评估表插示例数据 | |
-| `训练数据.sql` | 往实时训练表插示例数据 | |
-| `patient_info.sql` | ⚠️ 旧版患者表（**缺登录字段**） | 与 `BCI.sql` 冲突，仅供对照 |
-| `doctor.sql` | ⚠️ 旧版医生表（缺 `role` 列） | 碎片 |
-| `escort_info.sql` | ⚠️ 旧版陪同表（缺 `role` 列） | 碎片 |
-| `game_level_connfig.sql` | 关卡表 DDL（**文件名拼错** config） | 碎片 |
-| `train_real_time_data.sql` | 实时训练表 DDL | 碎片（主文件里已有） |
-| `stage_assesment.sql` | 阶段评估表 DDL（**文件名拼错** assessment） | 碎片 |
+| ⭐ `BCI.sql` | **【唯一主文件·最全】** 建库 + USE + 完整建表 + 示例数据 + 索引 | 认准它当唯一真源，包含 patient/doctor/escort/关卡/实时训练/阶段评估 |
+| `experiment_record.sql` | 平台实验反馈记录表 | 配合后端连接华南脑控平台（BCI.sql 未含，需另跑） |
+| `add_email_column.sql` | **已有库补 email 列**（找回密码用） | 仅老库需要；新库由 BCI.sql 已带 email，不用跑 |
+| `bci_data.sql` | 脑电数据表（无外键、无 ORM 模型） | 可选，仅在 SQL 里有，需手动建 |
+| `questionnaire.sql` | 问卷**模板**主表 + 问题表，并插入 10 道题 | 可选，问卷题目来自这里（运行时后端硬编码，不查此表） |
 
-> ⚠️ **为什么碎片文件不能乱跑？**
-> 建表语句都是 `CREATE TABLE IF NOT EXISTS`。如果你先跑了 `patient_info.sql`（旧版、缺 `username/pwd/role/doctor_id`），再跑 `BCI.sql`，因为表已存在，`BCI.sql` 不会覆盖，结果库里就是**缺字段的旧表**。所以认准 `BCI.sql` 当唯一真源。
+> 🗑️ 已删除的冗余碎片文件（`patient_info.sql` / `doctor.sql` / `escort_info.sql` / `game_level_connfig.sql` / `train_real_time_data.sql` / `stage_assesment.sql` / `插入游戏关卡配置数据.sql` / `阶段评估数据.sql` / `训练数据.sql` / `数据库初始化.sql`）：它们的内容都已被 `BCI.sql` 覆盖，且部分是缺字段的旧版或文件名拼写错误的重复表，混跑会与主文件冲突、缺字段。现已删除，避免建表时搞错。
 
 ---
 
@@ -213,9 +202,8 @@
 
 ```sql
 -- 1) 用 MySQL 客户端执行（按顺序）
-source 数据库初始化.sql;     -- 建库 + USE
-source BCI.sql;              -- 主表 + 示例数据 + 索引
-source experiment_record.sql;-- 平台实验反馈表
+source BCI.sql;              -- 建库 + USE + 主表 + 示例数据 + 索引（唯一主文件）
+source experiment_record.sql;-- 平台实验反馈表（可选，BCI.sql 未含）
 source bci_data.sql;         -- （可选）脑电数据表
 source questionnaire.sql;    -- （可选）问卷模板 + 10 道题
 ```
@@ -232,7 +220,8 @@ python app.py
 ## 7. 注意事项 / 已知待优化
 
 - 🔐 **密码明文存储**：`patient_info.pwd` / `doctor_info.pwd` / `escort_info.pwd` 目前是明文，生产环境务必改密码哈希（如 werkzeug `generate_password_hash`）。
-- 🧩 **碎片 SQL 字段不一致**：`patient_info.sql` / `doctor.sql` / `escort.sql` 是旧版，缺 `role`/登录字段，不要与 `BCI.sql` 混跑。
+- 🧩 **SQL 已精简**：原 `patient_info.sql` / `doctor.sql` / `escort_info.sql` / `game_level_connfig.sql` / `train_real_time_data.sql` / `stage_assesment.sql` 等碎片文件（重复/旧版）已删除，业务表一律以 `BCI.sql` 为准，避免混跑冲突。
+- 🔠 **字符集/排序规则必须统一为 `utf8mb4` + `utf8mb4_general_ci`**，且要与 `config.py` 连接串里的 `collation=utf8mb4_general_ci` 一致。两边不一致时，建外键会报 `[HY000][3780] Referencing column ... are incompatible`（典型：`escort_info`/`stage_assessment`/`train_real_time_data` 指向 `patient_info` 的外键）。改 collation 时 `config.py` 与所有 `.sql` 一起改。
 - 🔤 **个别类型不一致**：模型里 `affected_side` 是 `String(2)` 而 SQL 是 `CHAR(1)`，纯显示层面，统一即可。
 - 🗑️ **实时表会很大**：`train_real_time_data` 每帧一行，量增长快，建议定期备份/归档。
 - 🔗 **外键都是 CASCADE**：删除患者会连带删除其训练/评估/实验记录，操作前确认。

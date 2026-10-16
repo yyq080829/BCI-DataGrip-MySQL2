@@ -10,6 +10,9 @@
 --     高阶脑电分析需求（当前后端未自动落库，预留扩展）。
 -- =====================================================================
 
+-- 选中数据库（在“未选库”的执行窗口里必须先选中，否则报 [3D000][1046] No database selected）
+USE stroke_rehab_game;
+
 CREATE TABLE IF NOT EXISTS bci_data (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
     patient_id VARCHAR(20) NOT NULL COMMENT '患者ID',
@@ -26,4 +29,4 @@ CREATE TABLE IF NOT EXISTS bci_data (
     raw_std FLOAT COMMENT '原始数据标准差',
     device_id VARCHAR(50) COMMENT '脑电设备ID'
     -- FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='脑电数据存储表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='脑电数据存储表';

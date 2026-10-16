@@ -10,6 +10,9 @@
 
 -- ======================= 康复评估问卷表 =======================
 
+-- 选中数据库（在“未选库”的执行窗口里必须先选中，否则报 [3D000][1046] No database selected）
+USE stroke_rehab_game;
+
 -- 1. 问卷主表
 CREATE TABLE IF NOT EXISTS questionnaire (
     id INT PRIMARY KEY AUTO_INCREMENT COMMENT '问卷ID',
@@ -17,7 +20,7 @@ CREATE TABLE IF NOT EXISTS questionnaire (
     description TEXT COMMENT '问卷描述/引导语',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     is_active TINYINT(1) DEFAULT 1 COMMENT '是否当前激活的问卷'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='康复评估问卷主表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='康复评估问卷主表';
 
 -- 2. 问题表
 CREATE TABLE IF NOT EXISTS question (
@@ -27,7 +30,7 @@ CREATE TABLE IF NOT EXISTS question (
     options JSON NOT NULL COMMENT '选项数组',
     sort_order INT DEFAULT 0 COMMENT '显示顺序',
     FOREIGN KEY (questionnaire_id) REFERENCES questionnaire(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评估问题表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='评估问题表';
 
 -- 3. 插入问卷主记录（激活状态）
 INSERT INTO questionnaire (title, description, is_active) VALUES 

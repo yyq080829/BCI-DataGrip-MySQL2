@@ -34,6 +34,9 @@ class Config:
 
     # SQLAlchemy 连接串：mysql+pymysql://用户:密码@主机:端口/库?字符集
     # pymysql 是纯 Python 的 MySQL 驱动（见 requirements.txt）
+    # ⚠️ 这里的 collation 必须与 sql_files/BCI.sql 里的 COLLATE 完全一致
+    #    （当前都是 utf8mb4_general_ci）。若两边不一致，SQL 建表时的外键会报
+    #    [HY000][3780] ... are incompatible。
     SQLALCHEMY_DATABASE_URI = (
         f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@"
         f"{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"

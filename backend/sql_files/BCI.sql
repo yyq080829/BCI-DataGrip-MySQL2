@@ -2,19 +2,30 @@
 -- 主文件（最全）：脑卒中康复游戏数据库 完整建表 + 示例数据 + 索引
 -- ---------------------------------------------------------------------
 -- ⭐ 这是唯一真源(Single Source of Truth)。
---   手工建库时：先跑 数据库初始化.sql，再跑本文件；
+--   手工建库时：直接执行本文件即可（已含 建库 + USE + 建表 + 示例数据 + 索引）。
 --   email 列已随本文件建好（找回密码功能用）。
 --   平台实验反馈表另见 experiment_record.sql（再补跑一份即可）。
+--
+-- ⚠️ 字符集/排序规则必须与 backend/config.py 完全一致，否则建外键时会报：
+--      [HY000][3780] Referencing column ... and referenced column ...
+--      in foreign key constraint ... are incompatible
+--    原因：外键两边的列 collation 不一致（一边 general_ci、一边 unicode_ci）。
+--    config.py 连接串用的是 charset=utf8mb4&collation=utf8mb4_general_ci，
+--    因此本文件全部统一为 utf8mb4 + utf8mb4_general_ci。
+--
 -- 说明：
 --   · 真实运行的库由后端 ORM（db.create_all）自动创建，本文件主要用于
 --     “看表结构 / 本地手动建一套库 / 备份参考”。
 --   · 改表结构请优先改 backend/models/*.py，再同步到这里。
 -- =====================================================================
 
--- 创建数据库
+-- 让本次客户端连接也使用 utf8mb4，避免中文乱码
+SET NAMES utf8mb4;
+
+-- 创建数据库（已存在则保持原样；下面每张表都显式声明 COLLATE，保证彼此一致）
 CREATE DATABASE IF NOT EXISTS stroke_rehab_game
 DEFAULT CHARACTER SET utf8mb4
-COLLATE utf8mb4_unicode_ci;
+COLLATE utf8mb4_general_ci;
 
 USE stroke_rehab_game;
 
@@ -36,7 +47,7 @@ CREATE TABLE IF NOT EXISTS patient_info (
     username VARCHAR(50) NOT NULL UNIQUE COMMENT '登录账号',
     doctor_id VARCHAR(20) COMMENT '关联医生ID',
     role VARCHAR(20) DEFAULT 'patient' COMMENT '角色'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='患者信息表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='患者信息表';
 
 -- ======================= 2. 游戏关卡配置表 =======================
 -- 每个游戏(星光舞台/星际翼航/肘伸展采水晶)的关卡：目标角度/难度/时长
@@ -50,7 +61,7 @@ CREATE TABLE IF NOT EXISTS game_level_config (
     train_duration INT NOT NULL COMMENT '训练时长(秒)',
     difficulty VARCHAR(10) NOT NULL COMMENT '难度',
     game_remark VARCHAR(200) COMMENT '规则说明'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- 插入关卡数据（示例）
 INSERT IGNORE INTO game_level_config (game_name, train_part, level_name, target_angle, angle_tolerance, train_duration, difficulty, game_remark) VALUES
@@ -63,6 +74,8 @@ INSERT IGNORE INTO game_level_config (game_name, train_part, level_name, target_
 
 -- ======================= 3. 训练实时数据表 =======================
 -- Unity 每帧上报一帧(角度/难度/反馈)就插一行；量增长快，注意归档
+-- 索引直接写在建表语句里（KEY ...），这样重复执行本文件也不会报
+-- “Duplicate key name”（比单独的 CREATE INDEX 更安全、可反复运行）
 CREATE TABLE IF NOT EXISTS train_real_time_data (
     data_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     patient_id VARCHAR(20) NOT NULL,
@@ -77,9 +90,12 @@ CREATE TABLE IF NOT EXISTS train_real_time_data (
     compensation_score INT DEFAULT 100,
     device_type VARCHAR(30) DEFAULT 'AR手机',
     game_score INT DEFAULT 0,
+    KEY idx_patient_id (patient_id),
+    KEY idx_level_id (level_id),
+    KEY idx_train_time (train_time),
     FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE,
     FOREIGN KEY (level_id) REFERENCES game_level_config(level_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- ======================= 4. 阶段评估表 =======================
 CREATE TABLE IF NOT EXISTS stage_assessment (
@@ -96,8 +112,9 @@ CREATE TABLE IF NOT EXISTS stage_assessment (
     ARAT_score INT DEFAULT 0,
     doctor_evaluation TEXT,
     next_train_plan TEXT,
+    KEY idx_assess_patient (patient_id),
     FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- ======================= 5. 医生表 =======================
 CREATE TABLE IF NOT EXISTS doctor_info (
@@ -111,7 +128,7 @@ CREATE TABLE IF NOT EXISTS doctor_info (
     pwd VARCHAR(50) NOT NULL,
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     role VARCHAR(20) DEFAULT 'doctor'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- ======================= 6. 陪同人员表 =======================
 CREATE TABLE IF NOT EXISTS escort_info (
@@ -125,8 +142,9 @@ CREATE TABLE IF NOT EXISTS escort_info (
     pwd VARCHAR(50) NOT NULL,
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     role VARCHAR(20) DEFAULT 'companion',
+    KEY idx_escort_patient (patient_id),
     FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- ======================= 插入数据 =======================
 -- 患者张三
@@ -160,11 +178,6 @@ VALUES ('202505001', '第1周', 57.50, 66.67, 95, 30, 25, '右侧肩外展平均
 INSERT IGNORE INTO escort_info (escort_id, escort_name, gender, relation, patient_id, phone, username, pwd) VALUES
 ('ESC2025001', '李母', '女', '母亲', '202505002', '13800138002', 'escort_lisi', 'Esc123456!'),
 ('ESC2025002', '张父', '男', '父亲', '202505001', '13700137000', 'escort_zhang', 'Esc123456!');
-
--- 索引（加速按患者/关卡/时间查询）
-CREATE INDEX idx_patient_id ON train_real_time_data(patient_id);
-CREATE INDEX idx_level_id ON train_real_time_data(level_id);
-CREATE INDEX idx_train_time ON train_real_time_data(train_time);
 
 -- 最终验证
 SELECT * FROM patient_info;
