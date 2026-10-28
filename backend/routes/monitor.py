@@ -2,16 +2,19 @@
 后台实时监控页面（蓝图 monitor_bp，页面 /monitor）
 
 用途：实时显示 Unity 第二个游戏（大臂康复）上报的「肩外展(大臂抬起)角度」。
-数据链路：Unity --training_frame--> train_real_time_data(数据库) --广播--> 本页(/monitor)
+数据链路：Unity --training_frame--> 桥接(bci_bridge_server.py) --落库--> train_real_time_data
 
-重要：这条链路与华南脑控 HybridBCI 平台、脑电数据完全无关，
-      大臂康复数据直接 Unity <-> 数据库对接，适合在后台大屏/医生端实时观看。
+与旧版区别：
+  旧版用 Flask-SocketIO 的 /monitor WebSocket 命名空间广播（依赖 eventlet + WebSocket）。
+  新版改为【HTTP 轮询】：前端每 500ms 拉一次 /api/monitor/data 取最新一帧。
+  这样彻底去掉了 WebSocket，监控页与桥接进程解耦，部署更简单。
 
-实现：一个自包含 HTML 页（无外部 CDN 依赖），用后端自带的
-      /socket.io/socket.io.js 连 WebSocket，订阅 /monitor 命名空间的 arm_angle_update 事件。
+页面 HTML 直接内联，部署最简单（无外部 CDN 依赖）。
 """
 
-from flask import Blueprint, Response
+from flask import Blueprint, Response, jsonify
+from extensions import db
+from models.training import TrainingData, GameLevel
 
 monitor_bp = Blueprint('monitor', __name__)
 
@@ -41,7 +44,7 @@ HTML = """<!DOCTYPE html>
 </head>
 <body>
   <h1><span class="dot" id="status"></span>大臂康复 · 实时角度监控</h1>
-  <div class="sub">数据来源：Unity → 数据库(train_real_time_data) · 不经过脑电平台</div>
+  <div class="sub">数据来源：Unity → 桥接脚本 → 数据库(train_real_time_data) · 不经过脑电平台 · HTTP 轮询</div>
 
   <div class="row">
     <div class="card stat">
@@ -71,43 +74,53 @@ HTML = """<!DOCTYPE html>
     <div class="log" id="log"></div>
   </div>
 
-<script src="/socket.io/socket.io.js"></script>
 <script>
-  // 连到后端 /monitor 命名空间（与 Unity 的 /unity 分开，互不干扰）
-  const socket = io('/monitor');
   const status = document.getElementById('status');
-  socket.on('connect', () => { status.style.background = '#3fb950'; });
-  socket.on('disconnect', () => { status.style.background = '#f85149'; });
-
   const points = [];
   const canvas = document.getElementById('chart');
   const ctx = canvas.getContext('2d');
+  let lastTime = null;
 
-  // 收到一帧角度更新就刷新页面
-  socket.on('arm_angle_update', (d) => {
-    document.getElementById('angle').textContent =
-      d.shoulder_abduction != null ? d.shoulder_abduction.toFixed(1) : '--';
-    document.getElementById('target').textContent =
-      d.target_angle != null ? d.target_angle.toFixed(1) : '--';
-    document.getElementById('level').textContent = d.level_name || d.level_id || '--';
-    document.getElementById('pid').textContent = d.patient_id || '--';
-    document.getElementById('time').textContent = d.train_time || '--';
+  async function poll() {
+    try {
+      const resp = await fetch('/api/monitor/data');
+      const d = await resp.json();
+      if (d.has_data) {
+        status.style.background = '#3fb950';
 
-    const q = document.getElementById('qual');
-    if (d.is_qualified) { q.textContent = '✓ 达标'; q.className = 'ok'; }
-    else { q.textContent = '✗ 未达标'; q.className = 'no'; }
+        document.getElementById('angle').textContent =
+          d.shoulder_abduction != null ? d.shoulder_abduction.toFixed(1) : '--';
+        document.getElementById('target').textContent =
+          d.target_angle != null ? d.target_angle.toFixed(1) : '--';
+        document.getElementById('level').textContent = d.level_name || d.level_id || '--';
+        document.getElementById('pid').textContent = d.patient_id || '--';
+        document.getElementById('time').textContent = d.train_time || '--';
 
-    if (d.shoulder_abduction != null) {
-      points.push(d.shoulder_abduction);
-      if (points.length > 60) points.shift();
-      drawChart(d.target_angle);
+        const q = document.getElementById('qual');
+        if (d.is_qualified) { q.textContent = '✓ 达标'; q.className = 'ok'; }
+        else { q.textContent = '✗ 未达标'; q.className = 'no'; }
+
+        if (d.shoulder_abduction != null) {
+          // 同一帧不要重复记日志（按采集时间去重）
+          if (d.train_time !== lastTime) {
+            lastTime = d.train_time;
+            points.push(d.shoulder_abduction);
+            if (points.length > 60) points.shift();
+            const log = document.getElementById('log');
+            const line = document.createElement('div');
+            line.textContent = `[${d.train_time}] 患者 ${d.patient_id} | 大臂=${d.shoulder_abduction}° 目标=${d.target_angle}° ${d.is_qualified ? '达标' : '未达标'}`;
+            log.prepend(line);
+          }
+          drawChart(d.target_angle);
+        }
+      } else {
+        status.style.background = '#f85149';
+      }
+    } catch (e) {
+      status.style.background = '#f85149';
     }
-
-    const log = document.getElementById('log');
-    const line = document.createElement('div');
-    line.textContent = `[${d.train_time}] 患者 ${d.patient_id} | 大臂=${d.shoulder_abduction}° 目标=${d.target_angle}° ${d.is_qualified ? '达标' : '未达标'}`;
-    log.prepend(line);
-  });
+    setTimeout(poll, 500);   // 每 500ms 拉一次（轮询）
+  }
 
   // 简易折线图：蓝线=实时角度，橙虚线=目标角度
   function drawChart(target) {
@@ -130,6 +143,8 @@ HTML = """<!DOCTYPE html>
     });
     ctx.stroke();
   }
+
+  poll();
 </script>
 </body>
 </html>
@@ -140,3 +155,33 @@ HTML = """<!DOCTYPE html>
 def monitor_page():
     """后台实时监控页：实时显示大臂抬起角度。"""
     return Response(HTML, mimetype='text/html')
+
+
+@monitor_bp.route('/api/monitor/data')
+def monitor_data():
+    """返回 train_real_time_data 最新一帧（含对应关卡目标角度），供前端轮询。"""
+    try:
+        row = (TrainingData.query
+               .order_by(TrainingData.train_time.desc())
+               .first())
+        if not row:
+            return jsonify({'has_data': False})
+
+        target_angle = None
+        level_name = None
+        if row.level:
+            target_angle = float(row.level.target_angle) if row.level.target_angle is not None else None
+            level_name = row.level.level_name
+
+        return jsonify({
+            'has_data': True,
+            'patient_id': row.patient_id,
+            'level_id': row.level_id,
+            'level_name': level_name,
+            'shoulder_abduction': float(row.shoulder_abduction) if row.shoulder_abduction is not None else None,
+            'target_angle': target_angle,
+            'is_qualified': row.is_qualified,
+            'train_time': row.train_time.strftime('%Y-%m-%d %H:%M:%S') if row.train_time else None,
+        })
+    except Exception as e:
+        return jsonify({'has_data': False, 'error': str(e)})

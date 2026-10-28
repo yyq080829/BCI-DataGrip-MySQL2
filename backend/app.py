@@ -7,22 +7,24 @@ Flask 后端主入口
      · 问卷题目 / 提交：/api/questionnaire/*（落到 questionnaire_record）
      · 同时托管 frontend/ 静态文件，访问 / 即可打开问卷页（康游智创）
   2. 第一个游戏（Unity <-> HybridBCI 平台 <-> MySQL）
-     · 脑机游戏经 HybridBCIBridge 与平台 TCP 通信
-     · 游戏结束后平台存一份，后端再"导出"一份到 MySQL（experiment_record + train_real_time_data）
+   · 脑机游戏由【独立进程 services/bci_bridge_server.py】负责：
+     平台结果翻译后发给 Unity，并把结果落库 experiment_record。
+     （命令行另开一个终端 `python services/bci_bridge_server.py` 跑，不在本 app 内）
   3. 第二个游戏（Unity <-> MySQL 直连）
-     · 大臂康复数据由 Unity 每帧 training_frame 直接写 train_real_time_data
-     · 并经 /monitor 后台页实时显示，不经过脑电平台
+   · 大臂康复数据由 Unity 每帧发往桥接，桥接写 train_real_time_data
+   · 后台 /monitor 页改为 HTTP 轮询实时显示，不经过脑电平台
 
-关于"前端和游戏要不要分开"：
+  关于"前端和游戏要不要分开"：
   · 它们共用一个数据库，没必要拆成两个后端。
-  · 这里用同一个 app.py 既提供 /api 接口、又托管前端静态文件，
-    启动一个进程即可同时服务前端与 Unity，部署最简单。
-"""
+  · 本 app.py 只负责 /api 接口 + 托管前端静态文件（问卷系统）。
+  · Unity 与脑电平台的连接交给独立桥接进程 bci_bridge_server.py，
+  这样避开了原 Flask + eventlet + WebSocket 多模块互相依赖导致的平台超时/协议错。
+  """
 
 from flask import Flask
 from flask_cors import CORS
 from config import Config
-from extensions import db, jwt, socketio
+from extensions import db, jwt
 
 
 def create_app():
@@ -34,7 +36,6 @@ def create_app():
     db.init_app(app)
     jwt.init_app(app)
     CORS(app, origins=app.config['CORS_ORIGINS'], supports_credentials=True)  # 允许跨域
-    socketio.init_app(app, cors_allowed_origins="*")                          # 允许 WebSocket 跨域
 
     # 在应用上下文里建表 + 初始化默认数据
     with app.app_context():
@@ -65,29 +66,18 @@ def create_app():
     from routes.training import training_bp
     from routes.questionnaire import questionnaire_bp
     from routes.auth import auth_bp
-    from routes.unity import unity_bp
     from routes.monitor import monitor_bp
     from routes.frontend import frontend_bp   # 托管前端静态文件（让 app.py 能打开前端）
 
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(questionnaire_bp, url_prefix='/api/questionnaire')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
-    app.register_blueprint(unity_bp)        # WebSocket 事件使用 /unity 命名空间
-    app.register_blueprint(monitor_bp)      # 后台实时监控页 /monitor
+    app.register_blueprint(monitor_bp)      # 后台实时监控页 /monitor（HTTP 轮询）
     app.register_blueprint(frontend_bp)     # 前端静态文件：/ 打开问卷页，/<file> 托管资源
 
-    # 启动 HybridBCI 平台桥接（平台 <-> Unity <-> 数据库）
-    from services.hybridbci_client import HybridBCIBridge
-    bridge = HybridBCIBridge(
-        socketio=socketio,
-        app=app,
-        host=app.config['BCI_HOST'],
-        port=app.config['BCI_PORT'],
-        p300_grid_rows=app.config.get('P300_GRID_ROWS', 3),
-        p300_grid_cols=app.config.get('P300_GRID_COLS', 4),
-    )
-    bridge.start()                       # 开启后台线程连平台（平台没开则每 3 秒重连，不阻塞）
-    app.config['BCI_CLIENT'] = bridge    # 存到 app 上，供 unity.py 调用（current_app.config['BCI_CLIENT']）
+    # ⚠️ Unity 与脑电平台的连接已交给独立进程 bci_bridge_server.py，
+    #    请用另一个终端运行：python services/bci_bridge_server.py
+    #    本 app 只负责 /api 接口与前端静态托管，不再内置桥接。
 
     return app
 
@@ -96,9 +86,8 @@ if __name__ == '__main__':
     # 直接运行 python app.py 时启动服务
     app = create_app()
     print("=" * 60)
-    print("  后端服务已启动（前端 + Unity + HybridBCI 平台已接入）")
+    print("  后端服务已启动（前端问卷系统 + API）")
     print(f"  Flask Web服务 : 0.0.0.0:5000")
-    print(f"  HybridBCI平台 : {app.config['BCI_HOST']}:{app.config['BCI_PORT']}")
     print("  可用接口:")
     print("    GET  /                      -> 打开前端问卷页")
     print("    GET  /index.html            -> Unity WebGL 入口")
@@ -110,11 +99,12 @@ if __name__ == '__main__':
     print("    POST /api/training/save")
     print("    GET  /api/training/history")
     print("    GET  /api/training/stats")
-    print("    WS   /unity  (register_patient / training_frame / p300_*)")
-    print("    WS   /monitor (后台实时大臂角度监控页 /monitor)")
-    print("    GET  /monitor (大臂康复实时角度后台显示)")
+    print("    GET  /monitor (大臂康复实时角度后台显示，HTTP 轮询)")
+    print("    GET  /api/monitor/data (最新一帧训练数据 JSON)")
     print("    GET  /api/questionnaire/questions")
     print("    POST /api/questionnaire/submit")
     print("=" * 60)
-    # 用 socketio.run 而不是 app.run，因为要用 eventlet 跑 WebSocket
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    print("  ⚠️ Unity 与脑电平台连接请另开终端运行:")
+    print("     python services/bci_bridge_server.py")
+    print("=" * 60)
+    app.run(host='0.0.0.0', port=5000, debug=True)

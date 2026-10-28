@@ -66,3 +66,13 @@ class Config:
     P300_GRID_COLS = 4       # 网格列数
     P300_EVENT_NON_TARGET = 0  # 非目标刺激的事件编号
     P300_EVENT_TARGET = 1     # 目标刺激的事件编号
+
+    # ---------- Unity ↔ 桥接服务（独立进程 services/bci_bridge_server.py）----------
+    # Unity3D 的 Link.cs 通过 TCP 连接本桥接（不再走 Flask/WebSocket）。
+    # 平台连接用上面的 BCI_HOST / BCI_PORT。
+    UNITY_HOST = '127.0.0.1'   # 桥接监听 Unity 的地址
+    UNITY_PORT = 9999          # 桥接监听 Unity 的端口（Link.cs 连接此端口）
+    # 当 Unity 未主动上报 patient_id 时，落库用的默认患者ID（开发期用，正式需 Unity 上报）
+    BRIDGE_DEFAULT_PATIENT_ID = '202505001'
+    # 是否把平台每次算法结果都落库到 experiment_record（细化日志；不需要可改 False）
+    BRIDGE_LOG_EVERY_RESULT = True
