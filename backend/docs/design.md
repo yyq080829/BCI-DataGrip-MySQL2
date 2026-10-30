@@ -52,7 +52,7 @@
 | 2 | 第一个游戏（Unity ↔ HybridBCI 平台 ↔ MySQL） | Unity → TCP:9999 → `bci_bridge_server.py` → 平台(TCP:8000)；平台结果回传 Unity；实验反馈落库 `experiment_record` | `services/bci_bridge_server.py` |
 | 3 | 第二个游戏（Unity ↔ MySQL 直连） | Unity → TCP:9999 → `bci_bridge_server.py` → `train_real_time_data`（不经脑电平台）→ HTTP 轮询 `/monitor` | `services/bci_bridge_server.py`、`routes/monitor.py` |
 
-> 关于“前端和游戏要不要分开”：前端与游戏共用一个数据库，不必拆两个库；但 **Unity 与平台的连接已抽成独立进程 `bci_bridge_server.py`**（TCP 桥接），避免 Flask/eventlet/WebSocket 多模块互相依赖导致平台连接超时/协议错。一个 `app.py` 仍同时提供 /api 接口 + 托管前端。
+> 关于"前端和游戏要不要分开"：前端与游戏共用一个数据库，不必拆两个库；但 **Unity 与平台的连接已抽成独立进程 `bci_bridge_server.py`**（TCP 桥接），避免 Flask/eventlet/WebSocket 多模块互相依赖导致平台连接超时/协议错。一个 `app.py` 仍同时提供 /api 接口 + 托管前端。
 
 ---
 
@@ -164,8 +164,9 @@ python services/bci_bridge_server.py
 ## 9. 已知待优化（新人接手注意）
 
 - 🔐 密码明文存储（`pwd` 字段），生产请改 werkzeug 哈希。
-- 🧩 `sql_files/` 有旧碎片文件（`patient_info.sql`/`doctor.sql` 等），已标注“请勿混跑”，认准 `BCI.sql`。
+- 🧩 `sql_files/` 有旧碎片文件（`patient_info.sql`/`doctor.sql` 等），已标注"请勿混跑"，认准 `BCI.sql`。
 - 🗑️ `train_real_time_data` 每帧一行，量大，需定期归档。
 - 🔗 外键均为 CASCADE，删患者会连带删训练/评估/实验记录。
 - 🧠 `bci_data` 脑电原始表当前未自动落库，仅预留（高阶脑电分析用）。
-- 🔌 **Unity 连接已改为独立桥接进程** `services/bci_bridge_server.py`（TCP:9999 ↔ 平台 TCP:8000），原 `routes/unity.py`、`services/hybridbci_client.py` 已删除，Flask 侧 `socketio`/`eventlet` 已移除；平台连接超时/协议错的坑通过“独立进程 + 纯标准库 TCP”规避。
+- 🔌 **Unity 连接已改为独立桥接进程** `services/bci_bridge_server.py`（TCP:9999 ↔ 平台 TCP:8000），原 `routes/unity.py`、`services/hybridbci_client.py` 已删除，Flask 侧 `socketio`/`eventlet` 已移除；平台连接超时/协议错的坑通过"独立进程 + 纯标准库 TCP"规避。
+- 🧩 **新客户端（Kyouic）领域模型**：后端按 Kyouic 的 `app/index.html` 数据模型补齐了患者临床档案字段与 5 张新表（`scale_assessment` / `clinical_assessment` / `training_record` / `eeg_session` / `doctor_advice`），并新增对应 API（`/api/patients`、`/api/assessment`、`/api/scales`、`/api/eeg`、`/api/advice`、`/api/training/record|records`）。Kyouic 当前是 localStorage 自包含前端，这些接口作为其后端数据源预留，接口字段已对齐客户端读取名（如 `patientId`）。

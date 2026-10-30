@@ -42,6 +42,7 @@ def create_app():
         import models.user
         import models.training
         import models.questionnaire
+        import models.clinical   # 新客户端领域模型：量表/临床评估/训练记录/脑电/建议
         db.create_all()   # 根据 models/ 里的类自动建表（SQL 文件只是参考/备份）
 
         # 如果游戏关卡表为空，插入默认 3 个关卡（星光舞台 初/中/高阶）
@@ -68,12 +69,22 @@ def create_app():
     from routes.auth import auth_bp
     from routes.monitor import monitor_bp
     from routes.frontend import frontend_bp   # 托管前端静态文件（让 app.py 能打开前端）
+    from routes.patients import patients_bp
+    from routes.assessment import assessment_bp
+    from routes.scales import scales_bp
+    from routes.eeg import eeg_bp
+    from routes.advice import advice_bp
 
     app.register_blueprint(training_bp, url_prefix='/api/training')
     app.register_blueprint(questionnaire_bp, url_prefix='/api/questionnaire')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(monitor_bp)      # 后台实时监控页 /monitor（HTTP 轮询）
     app.register_blueprint(frontend_bp)     # 前端静态文件：/ 打开问卷页，/<file> 托管资源
+    app.register_blueprint(patients_bp, url_prefix='/api/patients')
+    app.register_blueprint(assessment_bp, url_prefix='/api/assessment')
+    app.register_blueprint(scales_bp, url_prefix='/api/scales')
+    app.register_blueprint(eeg_bp, url_prefix='/api/eeg')
+    app.register_blueprint(advice_bp, url_prefix='/api/advice')
 
     # ⚠️ Unity 与脑电平台的连接已交给独立进程 bci_bridge_server.py，
     #    请用另一个终端运行：python services/bci_bridge_server.py
@@ -103,6 +114,11 @@ if __name__ == '__main__':
     print("    GET  /api/monitor/data (最新一帧训练数据 JSON)")
     print("    GET  /api/questionnaire/questions")
     print("    POST /api/questionnaire/submit")
+    print("    GET  /api/patients/  (列表/搜索/详情)")
+    print("    POST /api/assessment/submit  (10题临床评估→分级)")
+    print("    GET  /api/scales/meta  (5大量表元数据)")
+    print("    POST /api/eeg/import  (脑电会话导入)")
+    print("    POST /api/advice/  (医生建议增/查)")
     print("=" * 60)
     print("  ⚠️ Unity 与脑电平台连接请另开终端运行:")
     print("     python services/bci_bridge_server.py")

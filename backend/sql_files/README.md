@@ -42,6 +42,7 @@
 | `add_email_column.sql` | **已有库补 email 列**（找回密码用） | 仅老库需要；新库由 BCI.sql 已带 email，不用跑 |
 | `bci_data.sql` | 脑电数据表（无外键、无 ORM 模型） | 可选，仅在 SQL 里有，需手动建 |
 | `questionnaire.sql` | 问卷**模板**主表 + 问题表，并插入 10 道题 | 可选，问卷题目来自这里（运行时后端硬编码，不查此表） |
+| `add_clinical_2026.sql` | **已有库迁移**：给 `patient_info` 补临床列 + 新增 5 张表 | 仅老库需要；新库由 `BCI.sql` 已含这些表，不用跑 |
 
 > 🗑️ 已删除的冗余碎片文件（`patient_info.sql` / `doctor.sql` / `escort_info.sql` / `game_level_connfig.sql` / `train_real_time_data.sql` / `stage_assesment.sql` / `插入游戏关卡配置数据.sql` / `阶段评估数据.sql` / `训练数据.sql` / `数据库初始化.sql`）：它们的内容都已被 `BCI.sql` 覆盖，且部分是缺字段的旧版或文件名拼写错误的重复表，混跑会与主文件冲突、缺字段。现已删除，避免建表时搞错。
 
@@ -60,6 +61,11 @@
 | `stage_assessment` | `StageAssessment` | 阶段临床评估 |
 | `questionnaire_record` | `QuestionnaireRecord` | 患者问卷作答记录（⚠️ **只有 ORM 建表，本文件夹没有它的 .sql**） |
 | `experiment_record` | `ExperimentRecord` | 平台实验反馈记录（P300/SSVEP/MI 等） |
+| `scale_assessment` | `ScaleAssessment` | 量表评分历史（Fugl-Meyer/Brunnstrom/Barthel/MBI/MMSE） |
+| `clinical_assessment` | `ClinicalAssessment` | 10 题临床评估记录（0-4 分 → 康复等级） |
+| `training_record` | `TrainingRecord` | 训练记录（会话级汇总，对应前端 trainingRecords） |
+| `eeg_session` | `EegSession` | 脑电会话数据（α/β/SMR/θ/δ/ERD/准确率…） |
+| `doctor_advice` | `DoctorAdvice` | 医生给患者写的建议 |
 
 只在 SQL 里有、代码没建模的表（需手动执行对应 `.sql` 才会有）：
 
@@ -91,6 +97,15 @@
 | doctor_id | VARCHAR(20) | 主治医生 ID（仅存储，**不是外键**） |
 | role | VARCHAR(20) | 角色，默认 `patient` |
 | email | VARCHAR(100) | 邮箱（找回密码用，新增） |
+| diagnosis | VARCHAR(120) | 诊断（新增，新客户端临床字段） |
+| brunnstrom_stage | VARCHAR(10) | Brunnstrom 分期（新增） |
+| train_level | VARCHAR(10) | 训练等级：初级/中级/高级/精细（新增） |
+| fm_score | INT | Fugl-Meyer 上肢评分 0-66（新增） |
+| last_train | DATE | 最近训练日期（新增） |
+| adherence | INT | 训练依从率 %（新增） |
+| first_visit | DATE | 初诊日期（新增） |
+| recovery_progress | TEXT | 康复进度序列(JSON 数组)（新增） |
+| game_train_count | INT | 游戏训练次数（新增） |
 
 ### 4.2 doctor_info（医生表）/ escort_info（陪同人员表）
 结构类似患者：各自有 `*_id`(主键)、`*_name`、`gender`、`phone`、`username`(唯一)、`pwd`、`create_time`、`role`，并新增 `email`（找回密码用）。

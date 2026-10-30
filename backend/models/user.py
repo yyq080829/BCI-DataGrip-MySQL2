@@ -11,8 +11,19 @@ doctor_info   - 医生表
   · pwd 当前是【明文】存储，仅限开发；上线前请改成 werkzeug 密码哈希。
 """
 
+import json
 from datetime import datetime
 from extensions import db
+
+
+def _parse_list(text):
+    """把数据库里存的 JSON 数组文本还原成列表（康复进度序列等）。"""
+    if not text:
+        return []
+    try:
+        return json.loads(text)
+    except Exception:
+        return []
 
 
 class Patient(db.Model):
@@ -38,6 +49,17 @@ class Patient(db.Model):
     pwd = db.Column(db.String(50), nullable=False, comment='登录密码（开发阶段明文，生产请改哈希）')
     doctor_id = db.Column(db.String(20), comment='主治医生ID（仅存储，非外键）')
     role = db.Column(db.String(20), default='patient', comment='角色标识：patient/doctor/admin')
+
+    # ---- 临床康复摘要（新客户端 Kyouic 领域模型，对应 patientsData 字段）----
+    diagnosis = db.Column(db.String(120), comment='诊断，如 脑梗死后遗症（右侧偏瘫）')
+    brunnstrom_stage = db.Column(db.String(10), comment='Brunnstrom 分期：Ⅰ~Ⅵ')
+    train_level = db.Column(db.String(10), default='初级', comment='训练等级：初级/中级/高级/精细')
+    fm_score = db.Column(db.Integer, default=0, comment='Fugl-Meyer 上肢评分(0-66)')
+    last_train = db.Column(db.Date, comment='最近训练日期')
+    adherence = db.Column(db.Integer, default=0, comment='训练依从率(%)')
+    first_visit = db.Column(db.Date, comment='初诊日期')
+    recovery_progress = db.Column(db.Text, comment='康复进度序列(JSON 数组，如 [38,40,42,44,45])')
+    game_train_count = db.Column(db.Integer, default=0, comment='游戏训练次数')
 
     # ---- 关联关系（ORM 自动关联训练/问卷记录）----
     trainings = db.relationship('TrainingData', backref='patient', lazy=True)
@@ -65,6 +87,17 @@ class Patient(db.Model):
             'doctor_name': self.doctor_name,
             'doctor_id': self.doctor_id,       # ★ 前端读取
             'email': self.email,
+            # ---- 临床康复摘要（新客户端 Kyouic 领域模型）----
+            'diagnosis': self.diagnosis,
+            'brunnstrom_stage': self.brunnstrom_stage,
+            'train_level': self.train_level or '初级',
+            'fm_score': self.fm_score,
+            'last_train': self.last_train.strftime('%Y-%m-%d') if self.last_train else None,
+            'adherence': self.adherence,
+            'first_visit': self.first_visit.strftime('%Y-%m-%d') if self.first_visit else None,
+            'recovery_progress': _parse_list(self.recovery_progress),
+            'game_train_count': self.game_train_count,
+            'patientId': self.patient_id,       # ★ 客户端 localStorage 用 patientId
         }
 
 

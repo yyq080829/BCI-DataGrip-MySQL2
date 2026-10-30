@@ -46,7 +46,17 @@ CREATE TABLE IF NOT EXISTS patient_info (
     pwd VARCHAR(50) COMMENT '登录密码',
     username VARCHAR(50) NOT NULL UNIQUE COMMENT '登录账号',
     doctor_id VARCHAR(20) COMMENT '关联医生ID',
-    role VARCHAR(20) DEFAULT 'patient' COMMENT '角色'
+    role VARCHAR(20) DEFAULT 'patient' COMMENT '角色',
+    -- ↓↓↓ 新客户端 Kyouic 临床康复字段（与 models/user.py.Patient 对齐）↓↓↓
+    diagnosis VARCHAR(120) COMMENT '诊断，如 脑梗死后遗症（右侧偏瘫）',
+    brunnstrom_stage VARCHAR(10) COMMENT 'Brunnstrom 分期：Ⅰ~Ⅵ',
+    train_level VARCHAR(10) DEFAULT '初级' COMMENT '训练等级：初级/中级/高级/精细',
+    fm_score INT DEFAULT 0 COMMENT 'Fugl-Meyer 上肢评分(0-66)',
+    last_train DATE COMMENT '最近训练日期',
+    adherence INT DEFAULT 0 COMMENT '训练依从率(%)',
+    first_visit DATE COMMENT '初诊日期',
+    recovery_progress TEXT COMMENT '康复进度序列(JSON 数组)',
+    game_train_count INT DEFAULT 0 COMMENT '游戏训练次数'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='患者信息表';
 
 -- ======================= 2. 游戏关卡配置表 =======================
@@ -143,6 +153,82 @@ CREATE TABLE IF NOT EXISTS escort_info (
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     role VARCHAR(20) DEFAULT 'companion',
     KEY idx_escort_patient (patient_id),
+    FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- ======================= 7. 量表评分历史表 =======================
+-- 对应新客户端「康复量表」：患者各量表(Fugl-Meyer/Brunnstrom/Barthel/MBI/MMSE)评分历史
+CREATE TABLE IF NOT EXISTS scale_assessment (
+    assess_id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id VARCHAR(20) NOT NULL,
+    assess_date DATE DEFAULT NULL,
+    scale_key VARCHAR(20) NOT NULL COMMENT 'fugl-meyer/brunnstorm/barthel/adl/mmse',
+    scale_name VARCHAR(50) COMMENT '量表显示名',
+    score_text VARCHAR(30) COMMENT '评分文本，如 38/100 或 III期',
+    result_text VARCHAR(50) COMMENT '结果描述，如 明显运动障碍',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_scale_patient (patient_id),
+    FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- ======================= 8. 临床评估记录表 =======================
+-- 对应新客户端 10 题临床评估（每题 0-4 分）→ 康复等级
+CREATE TABLE IF NOT EXISTS clinical_assessment (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id VARCHAR(20) NOT NULL,
+    answers VARCHAR(50) NOT NULL COMMENT '10题作答(0-4)，逗号分隔',
+    total_score INT DEFAULT 0 COMMENT '总分(0-40)',
+    mapped_level VARCHAR(10) COMMENT '康复等级：初级/中级/高级/精细',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_clinical_patient (patient_id),
+    FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- ======================= 9. 训练记录表（会话级） =======================
+-- 对应新客户端 trainingRecords：一次训练的汇总（与逐帧 train_real_time_data 互补）
+CREATE TABLE IF NOT EXISTS training_record (
+    record_id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id VARCHAR(20) NOT NULL,
+    patient_name VARCHAR(50),
+    level VARCHAR(10) COMMENT '初级/中级/高级/精细',
+    game_name VARCHAR(50),
+    duration_min INT DEFAULT 0 COMMENT '训练时长(分钟)',
+    result_text VARCHAR(200),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_tr_patient (patient_id),
+    FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- ======================= 10. 脑电会话数据表 =======================
+-- 对应新客户端「脑电分析」：每次训练的 EEG 指标
+CREATE TABLE IF NOT EXISTS eeg_session (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id VARCHAR(20) NOT NULL,
+    session_no INT DEFAULT 0,
+    alpha DECIMAL(6,2) DEFAULT 0,
+    beta DECIMAL(6,2) DEFAULT 0,
+    smr DECIMAL(6,2) DEFAULT 0 COMMENT 'SMR感觉运动节律(12-15Hz)',
+    theta DECIMAL(6,2) DEFAULT 0,
+    delta DECIMAL(6,2) DEFAULT 0,
+    erd DECIMAL(6,2) DEFAULT 0 COMMENT 'ERD事件相关去同步(%)',
+    accuracy DECIMAL(6,2) DEFAULT 0 COMMENT '游戏准确率(%)',
+    attention DECIMAL(6,2) DEFAULT 0 COMMENT '专注度',
+    relaxation DECIMAL(6,2) DEFAULT 0 COMMENT '放松度',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_eeg_patient (patient_id),
+    FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- ======================= 11. 医生建议表 =======================
+-- 对应新客户端「康复建议」：医生给患者写的建议
+CREATE TABLE IF NOT EXISTS doctor_advice (
+    advice_id INT PRIMARY KEY AUTO_INCREMENT,
+    doctor_id VARCHAR(20),
+    patient_id VARCHAR(20) NOT NULL,
+    patient_name VARCHAR(50),
+    advice_text TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_advice_patient (patient_id),
     FOREIGN KEY (patient_id) REFERENCES patient_info(patient_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 

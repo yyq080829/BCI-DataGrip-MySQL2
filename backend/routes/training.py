@@ -15,6 +15,7 @@ routes/unity.py 的 WebSocket training_frame 事件（每帧一条，高频）�
 
 from flask import Blueprint, request, jsonify
 from models.training import TrainingData, GameLevel
+from models.clinical import TrainingRecord
 from extensions import db
 from datetime import datetime, timedelta
 from sqlalchemy import func
@@ -128,3 +129,43 @@ def get_training_stats():
 
     except Exception as e:
         return jsonify({'code': 500, 'message': f'统计失败: {str(e)}'}), 500
+
+
+# ================================================================
+# 会话级训练记录（对应新客户端 trainingRecords：time/patient/level/game/dur/result）
+# 与上面的"逐帧"实时数据 train_real_time_data 互补：这里是一次训练的汇总。
+# ================================================================
+
+@training_bp.route('/record', methods=['POST'])
+def save_training_record():
+    """保存一次训练会话汇总（游戏结束后调用）。"""
+    try:
+        d = request.get_json() or {}
+        pid = d.get('patient_id')
+        if not pid:
+            return jsonify({'code': 400, 'message': '缺少patient_id'}), 400
+        rec = TrainingRecord(
+            patient_id=pid,
+            patient_name=d.get('patient_name'),
+            level=d.get('level'),
+            game_name=d.get('game_name'),
+            duration_min=d.get('duration_min', 0),
+            result_text=d.get('result_text')
+        )
+        db.session.add(rec)
+        db.session.commit()
+        return jsonify({'code': 200, 'message': '已保存训练记录', 'data': rec.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'code': 500, 'message': f'保存失败: {str(e)}'}), 500
+
+
+@training_bp.route('/records', methods=['GET'])
+def list_training_records():
+    """某患者会话级训练记录列表（?patient_id=xxx）。"""
+    pid = request.args.get('patient_id')
+    if not pid:
+        return jsonify({'code': 400, 'message': '缺少patient_id'}), 400
+    rows = TrainingRecord.query.filter_by(patient_id=pid)\
+        .order_by(TrainingRecord.created_at.desc()).all()
+    return jsonify({'code': 200, 'data': [r.to_dict() for r in rows]}), 200
