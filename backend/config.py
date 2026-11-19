@@ -6,9 +6,12 @@
   其他模块通过 `from config import Config` 读取，方便统一管理和部署切换。
   改配置只改这一个文件，不用满世界找。
 
-新手最常改的地方：
-  · MYSQL_USER / MYSQL_PASSWORD / MYSQL_HOST / MYSQL_PORT / MYSQL_DATABASE
-    —— 你的 MySQL 真实账号密码（当前写死在代码里，正式部署应改用环境变量）。
+新手必读：
+  · 数据库的主机/端口/用户/密码/库名【一律不写在代码里】，
+    统一由 .vscode/launch.json 的 env 在启动时注入（按 F5 调试后端/桥接服务）。
+    这样代码里不会出现任何真实连接信息。
+  · 若你不用 VS Code 调试、而是在 cmd 直接运行 python app.py，
+    则需要自己先 set 同名环境变量（MYSQL_HOST / MYSQL_USER / ...），否则连不上库。
   · BCI_HOST / BCI_PORT —— 华南脑控 HybridBCI 平台 TCP 服务地址（默认本机 8000）。
   · CORS_ORIGINS —— 允许跨域访问的前端地址；开发期设 '*' 表示全部允许。
 """
@@ -24,23 +27,24 @@ class Config:
     # Flask 会话签名密钥（生产环境务必改成随机长字符串，或用环境变量注入）
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'hand-to-guess-string'
 
-    # ---------- 数据库（只用 MySQL，已彻底移除 SQLite）----------
-    # 下面 5 个变量拼成数据库连接串，必须与你的 MySQL 实际配置一致
-    MYSQL_USER = 'root'                 # MySQL 用户名
-    MYSQL_PASSWORD = 'Ljy18718957842'   # MySQL 密码（⚠️ 明文写在代码里，仅限本地开发）
-    MYSQL_HOST = '127.0.0.1'            # MySQL 主机（本机）
-    MYSQL_PORT = '3306'                 # MySQL 端口
-    MYSQL_DATABASE = 'stroke_rehab_game'  # 数据库名（要和 sql_files 里的一致）
+    # ---------- 数据库（MariaDB/MySQL）----------
+    # 私密信息不落代码：主机/端口/用户/密码/库名全部由环境变量提供（见 .vscode/launch.json）。
+    # 未设置时不给任何默认值，连接会明确失败，避免误连到别的库。
+    MYSQL_USER = os.environ.get('MYSQL_USER', '')
+    MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', '')
+    MYSQL_HOST = os.environ.get('MYSQL_HOST', '')
+    MYSQL_PORT = os.environ.get('MYSQL_PORT', '3306')
+    MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE', '')
 
     # SQLAlchemy 连接串：mysql+pymysql://用户:密码@主机:端口/库?字符集
     # pymysql 是纯 Python 的 MySQL 驱动（见 requirements.txt）
-    # ⚠️ 这里的 collation 必须与 sql_files/BCI.sql 里的 COLLATE 完全一致
-    #    （当前都是 utf8mb4_general_ci）。若两边不一致，SQL 建表时的外键会报
-    #    [HY000][3780] ... are incompatible。
+    # 注意：URL 里的 charset 只影响客户端连接，不决定 CREATE TABLE 的表级字符集。
+    # 表级 utf8mb4/utf8mb4_general_ci 由 app.py 里的 before_create 事件统一注入，
+    # 否则新建表会继承服务器默认排序规则，外键指向 patient_info 时报 errno 150。
     SQLALCHEMY_DATABASE_URI = (
         f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@"
         f"{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
-        f"?charset=utf8mb4&collation=utf8mb4_general_ci"
+        f"?charset=utf8mb4"
     )
 
     # SQLAlchemy 性能/稳定性开关

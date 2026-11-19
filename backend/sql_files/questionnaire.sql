@@ -10,8 +10,8 @@
 
 -- ======================= 康复评估问卷表 =======================
 
--- 选中数据库（在“未选库”的执行窗口里必须先选中，否则报 [3D000][1046] No database selected）
-USE stroke_rehab_game;
+-- 切换到远程 1Panel 的数据库 BCI（本地执行请改成 stroke_rehab_game）。
+USE BCI;
 
 -- 1. 问卷主表
 CREATE TABLE IF NOT EXISTS questionnaire (

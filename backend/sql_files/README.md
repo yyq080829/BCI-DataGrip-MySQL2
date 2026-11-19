@@ -23,28 +23,26 @@
 
 | 项目 | 值 |
 |------|-----|
-| 数据库名 | `stroke_rehab_game` |
+| 数据库名 | 远程 1Panel `BCI`（SQL 文件里 `USE BCI;`）/ 本地 `stroke_rehab_game`（执行前改掉库名） |
 | 字符集 | `utf8mb4` |
 | 排序规则 | `utf8mb4_general_ci`（必须与 `config.py` 一致，否则外键报 3780） |
 | 引擎 | `InnoDB` |
-| 连接方式 | MySQL（`backend/config.py` 里配置账号密码） |
+| 连接方式 | MariaDB/MySQL；账号密码走环境变量（见 `backend/config.py` 顶部说明），不写进代码/SQL |
 
 ---
 
 ## 2. 这些 SQL 文件分别是干什么的
 
-> 建议：**手工建库只跑 `BCI.sql` 一个主文件即可**（它已含 `CREATE DATABASE + USE`、所有业务表、示例数据与索引）。其余文件是可选的扩展/迁移，按需单独跑，不要重复执行。
+> 建议：**手工建库只跑 `BCI.sql` 一个主文件即可**（它已含所有业务表、示例数据与索引；开头 `USE BCI;` 切库，远程执行前请勿改动，本地执行请把 `BCI` 改成 `stroke_rehab_game`）。其余文件是可选的扩展，按需单独跑，不要重复执行。
 
 | 文件名 | 作用 | 备注 |
 |--------|------|------|
-| ⭐ `BCI.sql` | **【唯一主文件·最全】** 建库 + USE + 完整建表 + 示例数据 + 索引 | 认准它当唯一真源，包含 patient/doctor/escort/关卡/实时训练/阶段评估 |
+| ⭐ `BCI.sql` | **【唯一主文件·最全】** 建库 + USE + 完整建表 + 示例数据 + 索引 | 认准它当唯一真源，包含 patient/doctor/escort/关卡/实时训练/阶段评估，以及新增的 5 张临床表(量表/临床评估/训练记录/脑电/建议) |
 | `experiment_record.sql` | 平台实验反馈记录表 | 配合后端连接华南脑控平台（BCI.sql 未含，需另跑） |
-| `add_email_column.sql` | **已有库补 email 列**（找回密码用） | 仅老库需要；新库由 BCI.sql 已带 email，不用跑 |
 | `bci_data.sql` | 脑电数据表（无外键、无 ORM 模型） | 可选，仅在 SQL 里有，需手动建 |
 | `questionnaire.sql` | 问卷**模板**主表 + 问题表，并插入 10 道题 | 可选，问卷题目来自这里（运行时后端硬编码，不查此表） |
-| `add_clinical_2026.sql` | **已有库迁移**：给 `patient_info` 补临床列 + 新增 5 张表 | 仅老库需要；新库由 `BCI.sql` 已含这些表，不用跑 |
 
-> 🗑️ 已删除的冗余碎片文件（`patient_info.sql` / `doctor.sql` / `escort_info.sql` / `game_level_connfig.sql` / `train_real_time_data.sql` / `stage_assesment.sql` / `插入游戏关卡配置数据.sql` / `阶段评估数据.sql` / `训练数据.sql` / `数据库初始化.sql`）：它们的内容都已被 `BCI.sql` 覆盖，且部分是缺字段的旧版或文件名拼写错误的重复表，混跑会与主文件冲突、缺字段。现已删除，避免建表时搞错。
+> 🗑️ 已删除的冗余碎片文件（`patient_info.sql` / `doctor.sql` / `escort_info.sql` / `game_level_connfig.sql` / `train_real_time_data.sql` / `stage_assesment.sql` / `插入游戏关卡配置数据.sql` / `阶段评估数据.sql` / `训练数据.sql` / `数据库初始化.sql` / `add_email_column.sql` / `add_clinical_2026.sql`）：它们的内容都已被 `BCI.sql` 覆盖；后两个是早期「已有库补列」迁移脚本，现在本地库与远程库均已建全，不再需要。混跑旧脚本会与主文件冲突、缺字段，故删除避免搞错。
 
 ---
 
@@ -194,30 +192,41 @@
 
 ## 5. 数据流（这张图一看就懂）
 
-```
-                 WebSocket(/unity)                  TCP(8000)
-   Unity  ── training_frame ──▶ train_real_time_data    （实时角度/难度/反馈落库）
-     │
-     ├── p300_start / p300_flash / p300_stop ─┐
-     │                                        ▼
-     └── training_result ───────────▶  后端(HybridBCIBridge)  ──▶  华南脑控平台
-                                            │  platform 返回实验结果
-                                            ▼
-                                      experiment_record（平台反馈落库）
+> 注意：架构已升级——Unity **不再连 Flask 的 WebSocket**，而是连独立进程
+> `services/bci_bridge_server.py`（**TCP:9999**）；脑电平台也由这个桥接进程去连（**TCP:8000**）。
+> Flask 只做 HTTP 接口和 `/monitor` 轮询（每 500ms 拉一次），不再有 socketio / eventlet。
 
-   前端 ── 提交问卷 ──▶ questionnaire_record       题目来自 questionnaire / question
-   医生 ── 录入评估 ──▶ stage_assessment
 ```
+   Unity(Link.cs)
+      │  TCP :9999
+      ▼
+   bci_bridge_server.py  ──TCP :8000──▶  HybridBCI 脑电平台
+      │  ▲                                   │
+      │  │ 平台算法结果(ipc_algorithm_test)    │ 拼写/控制指令(SELECT/FORWARD/...)
+      │  ▼                                   │
+      │  train_real_time_data   experiment_record
+      │
+      │  (监控页数据流) HTTP 轮询 /api/monitor/data 每 500ms
+      ▼
+   Flask app.py(:5000) ──▶ MySQL
+      ├─ /api/patients /assessment /scales /eeg /advice /training  (新客户端 Kyouic 后端)
+      └─ /api/auth /questionnaire /training(逐帧) /monitor
 
-一句话：**Unity 负责采角度、平台负责脑机算法、后端负责把两边的数据都收进 MySQL。**
+   前端/医生 ── 提交问卷 ──▶ questionnaire_record   题目来自 questionnaire / question
+   医生     ── 录入评估 ──▶ stage_assessment
+```
+一句话：**Unity 负责采角度、平台负责脑机算法、独立桥接进程负责把两边的数据收进 MySQL，Flask 只做网页接口和监控页轮询。**
 
 ---
 
 ## 6. 快速上手（本地手工建一套库看数据）
 
 ```sql
--- 1) 用 MySQL 客户端执行（按顺序）
-source BCI.sql;              -- 建库 + USE + 主表 + 示例数据 + 索引（唯一主文件）
+-- 0) SQL 文件开头用 USE BCI; 切到远程 1Panel 的库；
+--    若在本地 MySQL 执行，请先把各文件里的 BCI 改成 stroke_rehab_game。
+--    库需预先创建好（utf8mb4 / utf8mb4_general_ci），账号需有该库权限。
+-- 1) 用 MySQL/MariaDB 客户端执行（按顺序）
+source BCI.sql;              -- 主表 + 示例数据 + 索引（唯一主文件）
 source experiment_record.sql;-- 平台实验反馈表（可选，BCI.sql 未含）
 source bci_data.sql;         -- （可选）脑电数据表
 source questionnaire.sql;    -- （可选）问卷模板 + 10 道题
@@ -234,7 +243,7 @@ python app.py
 
 ## 7. 注意事项 / 已知待优化
 
-- 🔐 **密码明文存储**：`patient_info.pwd` / `doctor_info.pwd` / `escort_info.pwd` 目前是明文，生产环境务必改密码哈希（如 werkzeug `generate_password_hash`）。
+- 🔐 **密码明文存储**：`patient_info.pwd` / `doctor_info.pwd` 目前是明文，生产环境务必改密码哈希（如 werkzeug `generate_password_hash`）。（陪同人员 `escort_info` 模型已移除，仅作遗留表，不再有对应代码读写。）
 - 🧩 **SQL 已精简**：原 `patient_info.sql` / `doctor.sql` / `escort_info.sql` / `game_level_connfig.sql` / `train_real_time_data.sql` / `stage_assesment.sql` 等碎片文件（重复/旧版）已删除，业务表一律以 `BCI.sql` 为准，避免混跑冲突。
 - 🔠 **字符集/排序规则必须统一为 `utf8mb4` + `utf8mb4_general_ci`**，且要与 `config.py` 连接串里的 `collation=utf8mb4_general_ci` 一致。两边不一致时，建外键会报 `[HY000][3780] Referencing column ... are incompatible`（典型：`escort_info`/`stage_assessment`/`train_real_time_data` 指向 `patient_info` 的外键）。改 collation 时 `config.py` 与所有 `.sql` 一起改。
 - 🔤 **个别类型不一致**：模型里 `affected_side` 是 `String(2)` 而 SQL 是 `CHAR(1)`，纯显示层面，统一即可。
@@ -244,10 +253,19 @@ python app.py
 
 ---
 
-## 8. 与前端 / Unity 对接的 3 件事（后端职责速查）
+## 8. 与前端 / Unity 对接的 4 件事（后端职责速查）
 
-1. **问卷系统（前端 ↔ 数据库）**：医生/患者登录用 `/api/auth/*`；问卷题目 `/api/questionnaire/questions`、提交 `/api/questionnaire/submit`（落到 `questionnaire_record`）。`app.py` 同时托管 `frontend/` 静态文件，访问 `/` 直接打开问卷页 `康游智创(5).html`。
-2. **第一个游戏（Unity ↔ HybridBCI 平台 ↔ MySQL）**：脑机游戏经 `HybridBCIBridge` 与平台 TCP 通信；游戏结束后平台存一份，后端再"导出"一份到 `experiment_record` + `train_real_time_data`。
-3. **第二个游戏（Unity ↔ MySQL 直连）**：大臂康复数据由 Unity 每帧 `training_frame` 直接写 `train_real_time_data`，并经 `/monitor` 实时显示，**不经过脑电平台**。
+1. **问卷系统（前端 ↔ 数据库）**：医生/患者登录用 `/api/auth/*`；问卷题目 `/api/questionnaire/questions`、提交 `/api/questionnaire/submit`（落到 `questionnaire_record`）。
+   > ⚠️ 原 `frontend/` 静态目录已移除，`routes/frontend.py` 仍指向它（访问 `/` 会 404）。如需托管前端页面，把 `frontend.py` 的目录改指向实际前端（如 `Kyouic/app/`）。
+2. **第一个游戏（Unity ↔ 桥接进程 ↔ HybridBCI 平台）**：Unity 的 `Link.cs` 通过 **TCP:9999** 连独立进程 `services/bci_bridge_server.py`（不再是 Flask WebSocket / `HybridBCIBridge`）；桥接进程再连脑电平台 **TCP:8000**。平台每次算法结果由桥接进程写进 `experiment_record`，拼写/控制指令由桥接翻译成 `SELECT`/`FORWARD` 等推回 Unity。
+3. **第二个游戏（大臂康复，Unity ↔ 桥接进程 ↔ MySQL）**：Unity 每帧 `training_frame`（肩外展等角度）经 TCP:9999 发给桥接进程，落库 `train_real_time_data`，**不经过脑电平台**；Flask 的 `/monitor` 页面通过 HTTP 轮询 `/api/monitor/data`（每 500ms 一次）读出最新一帧显示。
+4. **新客户端 Kyouic 后端（患者档案 / 临床评估 / 量表 / 脑电 / 建议 / 训练记录）**：本次新增 5 张表 + 一组接口（详见 `docs/Kyouic_后端对接清单.md`）：
+   - 患者：`/api/patients`（列表/搜索/详情/更新档案）→ `patient_info`(+临床列) / `scale_assessment` / `doctor_advice`
+   - 临床评估：`/api/assessment`（10 题 0-4 → 分级）→ `clinical_assessment`
+   - 量表：`/api/scales`（5 大量表元数据 + 评分历史）→ `scale_assessment`
+   - 脑电：`/api/eeg`（会话导入 / 列表 / 统计）→ `eeg_session`
+   - 建议：`/api/advice`（增/查）→ `doctor_advice`
+   - 训练：在原有 `/api/training` 下新增 `/record`、`/records`（会话级）→ `training_record`
 
-> ⚠️ 新增 `email` 字段用于找回密码：新建库会由 ORM 自动建列；**已有库请先执行 `sql_files/add_email_column.sql`**（ALTER）否则注册/找回密码会报 `Unknown column 'email'`。
+> ⚠️ `email` 字段与临床字段（`diagnosis`/`train_level`/…）及 5 张临床表均已包含在 `BCI.sql` 中，新库直接跑 `BCI.sql` 即可建全，无需额外迁移脚本。
+> 💡 若以后遇到「早期旧库缺列」的场景：ORM 的 `db.create_all()` 只会建表不会补列，需手工 `ALTER TABLE ... ADD COLUMN` 补齐（原则：先查列是否存在再补，避免重复报错）。原迁移脚本已删除。

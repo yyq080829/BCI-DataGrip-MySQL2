@@ -42,7 +42,14 @@ if _BACKEND_DIR not in sys.path:
 from config import Config                              # noqa: E402
 from sqlalchemy import create_engine                   # noqa: E402
 from sqlalchemy.orm import sessionmaker                # noqa: E402
-from models.training import ExperimentRecord, TrainingData  # noqa: E402
+# 关键：TrainingData/ExperimentRecord 的外键指向 patient_info、game_level_config，
+# 必须把这些被引用的模型一并导入注册到 SQLAlchemy metadata，否则 flush 时报
+# NoReferencedTableError（表现为"游戏玩了但数据库一条都不进"）。
+from models.user import Patient, Doctor               # noqa: E402,F401
+from models.questionnaire import QuestionnaireRecord  # noqa: E402,F401
+from models.training import (                          # noqa: E402
+    ExperimentRecord, TrainingData, GameLevel,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,13 +97,65 @@ def save_experiment_record(patient_id, experiment_type, extra_data,
         logger.exception('[DB] experiment_record 落库失败: %s', e)
 
 
-def save_training_frame(data):
-    """把 Unity 上报的一帧训练数据写入 train_real_time_data 表（第二个游戏）。"""
+# 关卡名 -> level_id 映射（Unity 常传 beginner/intermediate/advanced/fine 或中文名，
+# 但 train_real_time_data.level_id 是非空整数外键，必须转换，否则逐帧落库全部失败）
+LEVEL_NAME_TO_ID = {
+    'beginner': 1, '初级': 1, '初级节奏': 5, '入门': 1,
+    'intermediate': 2, '中级': 2, '航道2（进阶）': 2,
+    'advanced': 5, '高级': 6, '高级节奏': 6,
+    'fine': 3, '精细': 3, '入门关': 3,
+}
+
+
+def resolve_level_id(raw, session=None):
+    """把 Unity 上报的 level_id（可能是数字/关卡名字符串）解析成有效关卡主键。"""
+    if raw is None or raw == '':
+        return 1
+    if isinstance(raw, bool):
+        return 1
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float) and raw.is_integer():
+        return int(raw)
+    s = str(raw).strip()
+    if s.isdigit():
+        return int(s)
+    mapped = LEVEL_NAME_TO_ID.get(s.lower())
+    if mapped:
+        return mapped
+    for name, lid in LEVEL_NAME_TO_ID.items():
+        if name in s:
+            return lid
+    return 1
+
+
+def _level_exists(session, level_id):
+    """校验 level_id 在 game_level_config 中存在；不存在则回退到最小关卡。"""
+    try:
+        if session.query(GameLevel.level_id).filter_by(level_id=level_id).first():
+            return level_id
+        fallback = session.query(GameLevel.level_id).order_by(GameLevel.level_id).first()
+        if fallback:
+            logger.warning('[DB] level_id=%s 不存在，回退到 %s', level_id, fallback[0])
+            return fallback[0]
+    except Exception:
+        pass
+    return level_id
+
+
+def save_training_frame(data, fallback_patient_id=None):
+    """把 Unity 上报的一帧训练数据写入 train_real_time_data 表（第二个游戏）。
+
+    返回 (ok, error)；失败原因会由调用方回传给 Unity，避免"玩了没数据却无提示"。
+    """
     try:
         with _Session() as s:
+            patient_id = (data.get('patient_id') or fallback_patient_id
+                          or DEFAULT_PATIENT_ID)
+            level_id = _level_exists(s, resolve_level_id(data.get('level_id')))
             row = TrainingData(
-                patient_id=data.get('patient_id') or DEFAULT_PATIENT_ID,
-                level_id=data.get('level_id'),
+                patient_id=str(patient_id),
+                level_id=level_id,
                 shoulder_abduction=data.get('shoulder_abduction'),
                 elbow_extension=data.get('elbow_extension'),
                 forearm_rotation=data.get('forearm_rotation'),
@@ -111,8 +170,10 @@ def save_training_frame(data):
             s.commit()
             logger.info('[DB] 训练帧已落库 patient=%s level=%s',
                         row.patient_id, row.level_id)
+            return True, None
     except Exception as e:
         logger.exception('[DB] train_real_time_data 落库失败: %s', e)
+        return False, str(e)
 
 
 # ============================================================
@@ -406,7 +467,12 @@ class BCIBridge:
             self.current_patient_id = str(msg.get('patient_id') or self.current_patient_id)
             logger.info('[Unity] 注册患者: %s', self.current_patient_id)
         elif mtype == 'training_frame':
-            save_training_frame(msg)
+            ok, err = save_training_frame(msg, self.current_patient_id)
+            if not ok:
+                # 把失败原因回传给 Unity，便于在游戏端/日志里直接看到问题
+                self.unity_server.send_to_unity(json.dumps({
+                    'cmd': 'DB_ERROR', 'param': str(err or '训练帧落库失败'), 'intensity': 0
+                }, ensure_ascii=False))
         elif mtype == 'training_result':
             # 第二个游戏结束汇总（可选落库为一条实验反馈记录）
             save_experiment_record(

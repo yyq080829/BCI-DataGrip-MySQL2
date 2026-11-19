@@ -9,8 +9,8 @@
 --    一致（都是 utf8mb4 + utf8mb4_general_ci），否则报 [HY000][3780]。
 -- =====================================================================
 
--- 选中数据库（在“未选库”的执行窗口里必须先选中，否则报 [3D000][1046] No database selected）
-USE stroke_rehab_game;
+-- 切换到远程 1Panel 的数据库 BCI（本地执行请改成 stroke_rehab_game）。
+USE BCI;
 
 CREATE TABLE IF NOT EXISTS experiment_record (
     id             INT PRIMARY KEY AUTO_INCREMENT COMMENT '记录ID',

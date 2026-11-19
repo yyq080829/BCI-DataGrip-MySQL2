@@ -21,7 +21,7 @@ Flask 后端主入口
   这样避开了原 Flask + eventlet + WebSocket 多模块互相依赖导致的平台超时/协议错。
   """
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from config import Config
 from extensions import db, jwt
@@ -43,6 +43,15 @@ def create_app():
         import models.training
         import models.questionnaire
         import models.clinical   # 新客户端领域模型：量表/临床评估/训练记录/脑电/建议
+
+        # MariaDB 兼容：给所有表显式声明表级字符集/排序规则。
+        # 否则 ORM 建表会继承服务器默认排序规则，外键指向 patient_info
+        # （utf8mb4_general_ci）时报 errno 150 "Foreign key constraint is incorrectly formed"。
+        from sqlalchemy import event as _sa_event
+        for _table in db.metadata.tables.values():
+            _table.dialect_options['mysql']['charset'] = 'utf8mb4'
+            _table.dialect_options['mysql']['collate'] = 'utf8mb4_general_ci'
+
         db.create_all()   # 根据 models/ 里的类自动建表（SQL 文件只是参考/备份）
 
         # 如果游戏关卡表为空，插入默认 3 个关卡（星光舞台 初/中/高阶）
@@ -90,6 +99,20 @@ def create_app():
     #    请用另一个终端运行：python services/bci_bridge_server.py
     #    本 app 只负责 /api 接口与前端静态托管，不再内置桥接。
 
+    # 健康检查接口：供 Electron 客户端启动时探测后端连通性
+    # 不查数据库、不需要 JWT、不依赖 MySQL，即使 MySQL 不可用也能返回 200
+    @app.route('/api/health', methods=['GET'])
+    def health():
+        return jsonify({
+            "code": 200,
+            "message": "ok",
+            "data": {
+                "status": "ok",
+                "service": "kangyou-backend",
+                "version": "1.0"
+            }
+        })
+
     return app
 
 
@@ -100,6 +123,7 @@ if __name__ == '__main__':
     print("  后端服务已启动（前端问卷系统 + API）")
     print(f"  Flask Web服务 : 0.0.0.0:5000")
     print("  可用接口:")
+    print("    GET  /api/health            -> 后端连通性探活（无需数据库/JWT）")
     print("    GET  /                      -> 打开前端问卷页")
     print("    GET  /index.html            -> Unity WebGL 入口")
     print("    POST /api/auth/login")

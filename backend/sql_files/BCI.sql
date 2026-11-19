@@ -2,7 +2,8 @@
 -- 主文件（最全）：脑卒中康复游戏数据库 完整建表 + 示例数据 + 索引
 -- ---------------------------------------------------------------------
 -- ⭐ 这是唯一真源(Single Source of Truth)。
---   手工建库时：直接执行本文件即可（已含 建库 + USE + 建表 + 示例数据 + 索引）。
+--   手工建库时：先在连接工具里选中目标库（本地 stroke_rehab_game / 远程 1Panel 的 BCI），
+--   再执行本文件（建表 + 示例数据 + 索引；不含建库/切库语句）。
 --   email 列已随本文件建好（找回密码功能用）。
 --   平台实验反馈表另见 experiment_record.sql（再补跑一份即可）。
 --
@@ -22,12 +23,10 @@
 -- 让本次客户端连接也使用 utf8mb4，避免中文乱码
 SET NAMES utf8mb4;
 
--- 创建数据库（已存在则保持原样；下面每张表都显式声明 COLLATE，保证彼此一致）
-CREATE DATABASE IF NOT EXISTS stroke_rehab_game
-DEFAULT CHARACTER SET utf8mb4
-COLLATE utf8mb4_general_ci;
-
-USE stroke_rehab_game;
+-- 切换到远程 1Panel 的数据库 BCI（方案A）。
+-- 若在本地 MySQL 执行，请把下面的 BCI 改成 stroke_rehab_game。
+-- 库需预先在 1Panel 面板创建好（utf8mb4 / utf8mb4_general_ci），账号需有该库权限。
+USE BCI;
 
 -- ======================= 1. 患者表（包含所有字段） =======================
 -- 患者基础信息 + 登录账号（patient_id 同时是登录后的 JWT 身份）
